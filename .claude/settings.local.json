@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(alembic init:*)",
+      "Bash(alembic stamp:*)",
+      "Bash(python -m pytest:*)"
+    ]
+  }
+}

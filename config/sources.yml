@@ -1,0 +1,86 @@
+# Government source definitions for crawlers
+sources:
+  hdb:
+    name: "Housing & Development Board"
+    base_url: "https://www.hdb.gov.sg"
+    start_urls:
+      - "https://www.hdb.gov.sg/residential/buying-a-flat"
+      - "https://www.hdb.gov.sg/residential/selling-a-flat"
+      - "https://www.hdb.gov.sg/residential/living-in-an-hdb-flat"
+      - "https://www.hdb.gov.sg/residential/renting-a-flat"
+    allowed_domains:
+      - "www.hdb.gov.sg"
+    content_types:
+      - "eligibility"
+      - "schemes"
+      - "grants"
+      - "resale_rules"
+      - "bto_info"
+    js_rendering: true
+    crawl_delay: 2.0
+    estimated_pages: 300
+
+  ura:
+    name: "Urban Redevelopment Authority"
+    base_url: "https://www.ura.gov.sg"
+    start_urls:
+      - "https://www.ura.gov.sg/Corporate/Property"
+      - "https://www.ura.gov.sg/Corporate/Guidelines"
+    allowed_domains:
+      - "www.ura.gov.sg"
+    content_types:
+      - "property_guidelines"
+      - "development_rules"
+      - "private_property_regulations"
+    js_rendering: false
+    crawl_delay: 2.0
+    estimated_pages: 250
+
+  iras:
+    name: "Inland Revenue Authority of Singapore"
+    base_url: "https://www.iras.gov.sg"
+    start_urls:
+      - "https://www.iras.gov.sg/taxes/stamp-duty"
+      - "https://www.iras.gov.sg/taxes/property-tax"
+    allowed_domains:
+      - "www.iras.gov.sg"
+    content_types:
+      - "stamp_duty"
+      - "property_tax"
+      - "tax_rates"
+      - "reliefs"
+    js_rendering: false
+    crawl_delay: 2.0
+    estimated_pages: 120
+
+  mas:
+    name: "Monetary Authority of Singapore"
+    base_url: "https://www.mas.gov.sg"
+    start_urls:
+      - "https://www.mas.gov.sg/regulation/regulations-and-guidance"
+      - "https://www.mas.gov.sg/news"
+    allowed_domains:
+      - "www.mas.gov.sg"
+    content_types:
+      - "loan_limits"
+      - "tdsr"
+      - "ltv"
+      - "mortgage_regulations"
+    js_rendering: false
+    crawl_delay: 3.0
+    estimated_pages: 80
+
+  cpf:
+    name: "CPF Board"
+    base_url: "https://www.cpf.gov.sg"
+    start_urls:
+      - "https://www.cpf.gov.sg/member/home-ownership"
+    allowed_domains:
+      - "www.cpf.gov.sg"
+    content_types:
+      - "housing_scheme"
+      - "withdrawal_limits"
+      - "accrued_interest"
+    js_rendering: true
+    crawl_delay: 2.0
+    estimated_pages: 150

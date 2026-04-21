@@ -1,0 +1,75 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: kb-postgres
+    environment:
+      POSTGRES_DB: knowledge_base
+      POSTGRES_USER: kb_user
+      POSTGRES_PASSWORD: kb_pass
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: kb-redis
+    ports:
+      - "6379:6379"
+
+  minio:
+    image: minio/minio:latest
+    container_name: kb-minio
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    command: server /data --console-address ":9001"
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: kb-minio-init
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      sleep 3;
+      mc alias set local http://minio:9000 minioadmin minioadmin;
+      mc mb local/knowledge-base --ignore-existing;
+      exit 0;
+      "
+
+  # Optional Python app container. Start with: docker compose --profile app up app
+  app:
+    profiles:
+      - app
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: kb-app
+    volumes:
+      - .:/workspace
+    working_dir: /workspace
+    environment:
+      DATABASE_URL: postgresql://kb_user:kb_pass@postgres:5432/knowledge_base
+      REDIS_URL: redis://redis:6379/0
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin
+      S3_BUCKET: knowledge-base
+      S3_REGION: us-east-1
+    depends_on:
+      - postgres
+      - redis
+      - minio
+    command: ["tail", "-f", "/dev/null"]
+
+volumes:
+  pgdata:
+  minio-data:
