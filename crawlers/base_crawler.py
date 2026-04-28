@@ -203,7 +203,8 @@ class BaseCrawler(ABC):
                     user_agent=settings.crawl_user_agent,
                     extra_http_headers={"Accept-Language": "en-US,en;q=0.5"},
                 )
-                response = page.goto(url, wait_until="networkidle", timeout=30_000)
+                response = page.goto(url, wait_until="load", timeout=30_000)
+                page.wait_for_timeout(3000)
                 status = response.status if response else 200
 
                 if status in (403, 404):
@@ -252,7 +253,7 @@ class BaseCrawler(ABC):
 
     def fetch_page(self, url: str) -> httpx.Response | _PlaywrightResponse | None:
         """Fetch a page. Routes to Playwright for JS-rendered sources."""
-        if self._use_js_rendering:
+        if self._use_js_rendering and not url.lower().endswith(".pdf"):
             return self.fetch_page_js(url)
 
         for attempt in range(1, self.max_retries + 1):

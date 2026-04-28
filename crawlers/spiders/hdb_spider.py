@@ -22,12 +22,12 @@ logger = get_logger("hdb_crawler")
 
 # Sections to crawl (URL path prefixes)
 HDB_SECTIONS = [
-    "/residential/buying-a-flat",
-    "/residential/selling-a-flat",
-    "/residential/living-in-an-hdb-flat",
-    "/residential/renting-a-flat",
-    "/residential/financing-a-flat-purchase",
-    "/cs/infoweb/residential",
+    "/buying-a-flat",
+    "/managing-my-home",
+    "/renting-a-flat",
+    "/shops-and-offices",
+    "/business-partners",
+    "/parking",
 ]
 
 # URL patterns to skip
