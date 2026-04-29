@@ -3,7 +3,17 @@
     "allow": [
       "Bash(alembic init:*)",
       "Bash(alembic stamp:*)",
-      "Bash(python -m pytest:*)"
+      "Bash(python -m pytest:*)",
+      "Bash(awk -F: '{sum+=$2} END{print \"Total unit tests:\", sum}')",
+      "Bash(awk -F: '{sum+=$2} END{print \"Total integration tests:\", sum}')",
+      "Bash(alembic upgrade *)",
+      "Bash(pip install *)",
+      "Bash(python -c \"import sys; print\\(sys.executable\\)\")",
+      "Bash(python -m pip install tenacity \"pinecone>=5.0\")",
+      "Bash(python -m pip show tenacity)",
+      "Bash(python -c \"from processors import HTMLExtractor, PDFExtractor, MetadataExtractor, DocumentChunker, ChunkValidator, TableExtractor; print\\('processors imports OK'\\)\")",
+      "Bash(python -c \"from embedders import EmbeddingService, PineconeStore, PgVectorStore, EmbeddingPipeline; print\\('embedders imports OK'\\)\")",
+      "Bash(python -c ' *)"
     ]
   }
 }

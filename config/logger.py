@@ -4,9 +4,15 @@ import structlog
 
 from config.settings import settings
 
+_configured = False
 
-def setup_logging():
-    """Configure structlog for the application."""
+
+def setup_logging() -> None:
+    """Configure structlog once for the application."""
+    global _configured
+    if _configured:
+        return
+
     structlog.configure(
         processors=[
             structlog.contextvars.merge_contextvars,
@@ -23,6 +29,7 @@ def setup_logging():
         logger_factory=structlog.PrintLoggerFactory(),
         cache_logger_on_first_use=True,
     )
+    _configured = True
 
 
 def get_logger(name: str):

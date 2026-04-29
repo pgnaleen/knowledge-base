@@ -11,12 +11,19 @@ import hashlib
 import time
 import urllib.robotparser
 from abc import ABC, abstractmethod
+from collections import deque
 from datetime import datetime
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
 import httpx
 from bs4 import BeautifulSoup
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from config.logger import get_logger
 from config.settings import settings
@@ -255,37 +262,42 @@ class BaseCrawler(ABC):
         if self._use_js_rendering:
             return self.fetch_page_js(url)
 
-        for attempt in range(1, self.max_retries + 1):
-            self._rate_limit()
-            try:
-                response = self.client.get(url)
-                response.raise_for_status()
-                logger.debug("page_fetched", url=url, status=response.status_code)
-                return response
-            except httpx.HTTPStatusError as e:
-                logger.warning(
-                    "http_error",
-                    url=url,
-                    status=e.response.status_code,
-                    attempt=attempt,
-                )
-                if e.response.status_code in (403, 404):
-                    return None
-            except httpx.RequestError as e:
-                logger.warning(
-                    "request_error",
-                    url=url,
-                    error=str(e),
-                    attempt=attempt,
-                )
+        try:
+            return self._fetch_with_retry(url)
+        except httpx.HTTPStatusError as e:
+            # 403/404 are non-retryable client errors — already logged inside _fetch_with_retry
+            if e.response.status_code in (403, 404):
+                return None
+            self.errors.append({"url": url, "error": "max_retries_exceeded"})
+            return None
+        except httpx.RequestError:
+            self.errors.append({"url": url, "error": "max_retries_exceeded"})
+            return None
 
-            if attempt < self.max_retries:
-                backoff = 2**attempt
-                logger.info("retrying", url=url, backoff=backoff)
-                time.sleep(backoff)
+    @retry(
+        retry=retry_if_exception_type(httpx.RequestError),
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        reraise=True,
+    )
+    def _fetch_with_retry(self, url: str) -> httpx.Response:
+        """HTTP GET with tenacity-driven exponential backoff on network errors.
 
-        self.errors.append({"url": url, "error": "max_retries_exceeded"})
-        return None
+        HTTPStatusError is re-raised after one attempt — caller handles 403/404
+        as non-retryable. Network errors (RequestError) get up to 3 attempts.
+        """
+        self._rate_limit()
+        try:
+            response = self.client.get(url)
+            response.raise_for_status()
+            logger.debug("page_fetched", url=url, status=response.status_code)
+            return response
+        except httpx.HTTPStatusError as e:
+            logger.warning("http_error", url=url, status=e.response.status_code)
+            raise
+        except httpx.RequestError as e:
+            logger.warning("request_error", url=url, error=str(e))
+            raise
 
     # ── HTML parsing helpers ──────────────────────────────────────────────
 
@@ -398,11 +410,10 @@ class BaseCrawler(ABC):
         logger.info("crawl_started", source=self.source_code)
         start_time = time.time()
 
-        urls_to_crawl = self.get_urls_to_crawl()
-        queue = list(urls_to_crawl)
+        queue: deque[str] = deque(self.get_urls_to_crawl())
 
         while queue:
-            url = queue.pop(0)
+            url = queue.popleft()
             if url in self.visited_urls:
                 continue
             self.visited_urls.add(url)

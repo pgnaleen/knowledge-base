@@ -14,6 +14,8 @@ from sqlalchemy import (
     Text,
     func,
 )
+from pgvector.sqlalchemy import Vector
+from sqlalchemy import UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSON, UUID
 from sqlalchemy.orm import relationship
 
@@ -65,6 +67,7 @@ class RawDocument(Base):
     chunks = relationship("ProcessedChunk", back_populates="document")
 
     __table_args__ = (
+        UniqueConstraint("source_id", "url", name="uq_raw_documents_source_url"),
         Index("ix_raw_documents_source_url", "source_id", "url"),
         Index("ix_raw_documents_content_hash", "content_hash"),
         Index("ix_raw_documents_status", "status"),
@@ -84,6 +87,7 @@ class ProcessedChunk(Base):
     heading_path = Column(String(1000))  # e.g. "Eligibility > Singapore Citizens > First Timer"
     token_count = Column(Integer)
     embedding_id = Column(String(100))  # ID in vector store
+    embedding = Column(Vector(3072))  # pgvector fallback storage
     metadata_json = Column(JSON, default=dict)
     created_at = Column(DateTime, server_default=func.now())
 

@@ -20,7 +20,7 @@ dependencies = [
 
     # Embeddings & Vector Store
     "openai>=1.30",
-    "pinecone-client>=3.0",
+    "pinecone>=5.0",
 
     # Database
     "sqlalchemy>=2.0",
@@ -45,6 +45,7 @@ dependencies = [
     "pydantic-settings>=2.2",
     "httpx>=0.27",
     "rank-bm25>=0.2",
+    "tenacity>=8.2",
 ]
 
 [tool.setuptools.packages.find]
