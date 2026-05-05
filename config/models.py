@@ -1,9 +1,10 @@
 """Database models for the knowledge base pipeline."""
 
 import uuid
-from datetime import datetime
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
+    Boolean,
     Column,
     DateTime,
     Enum,
@@ -12,10 +13,9 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
-from pgvector.sqlalchemy import Vector
-from sqlalchemy import UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSON, UUID
 from sqlalchemy.orm import relationship
 
@@ -32,7 +32,7 @@ class Source(Base):
     code = Column(String(20), nullable=False, unique=True)  # hdb, ura, iras, mas, cpf
     base_url = Column(String(500), nullable=False)
     crawl_config = Column(JSON, default=dict)
-    is_active = Column(Integer, default=1)
+    is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -48,12 +48,9 @@ class RawDocument(Base):
     source_id = Column(UUID(as_uuid=True), ForeignKey("sources.id"), nullable=False)
     url = Column(String(2000), nullable=False)
     content_hash = Column(String(64), nullable=False)  # SHA-256
-    content_type = Column(String(50), default="text/html")  # text/html, application/pdf
-    title = Column(String(500))
-    raw_html = Column(Text)
-    raw_text = Column(Text)
-    s3_html_key = Column(String(500))
-    s3_pdf_key = Column(String(500))
+    raw_text = Column(Text)  # Extracted plain text from HTML/PDF (populated by processors)
+    s3_html_key = Column(String(500))  # S3 pointer to raw HTML
+    s3_pdf_key = Column(String(500))  # S3 pointer to raw PDF
     last_modified = Column(DateTime)
     crawled_at = Column(DateTime, server_default=func.now())
     status = Column(
@@ -83,7 +80,6 @@ class ProcessedChunk(Base):
     document_id = Column(UUID(as_uuid=True), ForeignKey("raw_documents.id"), nullable=False)
     chunk_text = Column(Text, nullable=False)
     chunk_index = Column(Integer, nullable=False)
-    total_chunks = Column(Integer)
     heading_path = Column(String(1000))  # e.g. "Eligibility > Singapore Citizens > First Timer"
     token_count = Column(Integer)
     embedding_id = Column(String(100))  # ID in vector store

@@ -19,7 +19,7 @@ env/
 *.swp
 *.swo
 
-# Environment
+# Environment — never commit real secrets
 .env
 .env.local
 .env.production
@@ -27,7 +27,14 @@ env/
 # Docker
 docker-compose.override.yml
 
-# Data
+# Scrapy
+.scrapy/
+
+# Playwright
+playwright-report/
+test-results/
+
+# Data files
 data/
 *.pdf
 *.html
@@ -36,13 +43,16 @@ data/
 logs/
 *.log
 
-# Testing
+# Testing & coverage
 .coverage
 htmlcov/
 .pytest_cache/
 
-# MinIO data
+# MinIO / S3 local data
 minio-data/
+
+# Alembic — do NOT ignore versions/; only ignore auto-generated pycache
+alembic/__pycache__/
 
 # OS
 .DS_Store

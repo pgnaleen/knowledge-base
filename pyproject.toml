@@ -6,6 +6,7 @@ requires-python = ">=3.11"
 dependencies = [
     # Web Crawling
     "scrapy>=2.11",
+    "scrapy-playwright>=0.0.34",
     "playwright>=1.40",
     "beautifulsoup4>=4.12",
     "lxml>=5.0",
@@ -21,6 +22,7 @@ dependencies = [
     # Embeddings & Vector Store
     "openai>=1.30",
     "pinecone>=5.0",
+    
 
     # Database
     "sqlalchemy>=2.0",
@@ -39,6 +41,7 @@ dependencies = [
     "celery[redis]>=5.3",
 
     # Utilities
+    "pyyaml>=6.0",
     "structlog>=24.0",
     "python-dotenv>=1.0",
     "pydantic>=2.7",
@@ -77,10 +80,16 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "--cov=crawlers --cov=processors --cov=embedders --cov-report=term-missing -m 'not integration'"
+addopts = "--cov=crawlers --cov=processors --cov=embedders --cov=config --cov-report=term-missing --cov-fail-under=80 --cov-config=pyproject.toml -m 'not integration'"
 markers = [
     "integration: requires live infrastructure (PostgreSQL, MinIO, network)",
     "slow: makes live HTTP requests to government sites",
+]
+
+[tool.coverage.run]
+omit = [
+    "crawlers/runner.py",       # integration-only CLI, no unit tests
+    "config/storage.py",        # requires live S3/MinIO
 ]
 
 [tool.mypy]

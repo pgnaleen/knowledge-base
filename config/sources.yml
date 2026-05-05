@@ -4,12 +4,12 @@ sources:
     name: "Housing & Development Board"
     base_url: "https://www.hdb.gov.sg"
     start_urls:
-      - "https://www.hdb.gov.sg/residential/buying-a-flat"
-      - "https://www.hdb.gov.sg/residential/selling-a-flat"
-      - "https://www.hdb.gov.sg/residential/living-in-an-hdb-flat"
-      - "https://www.hdb.gov.sg/residential/renting-a-flat"
+      - "https://www.hdb.gov.sg/buying-a-flat"
+      - "https://www.hdb.gov.sg/managing-my-home"
+      - "https://www.hdb.gov.sg/renting-a-flat"
     allowed_domains:
       - "www.hdb.gov.sg"
+      - "hdb.gov.sg"
     content_types:
       - "eligibility"
       - "schemes"
@@ -19,6 +19,11 @@ sources:
     js_rendering: true
     crawl_delay: 2.0
     estimated_pages: 300
+    respect_robots_txt: true
+    target_prefixes:
+      - "/buying-a-flat"
+      - "/managing-my-home"
+      - "/renting-a-flat"
 
   ura:
     name: "Urban Redevelopment Authority"
@@ -28,6 +33,7 @@ sources:
       - "https://www.ura.gov.sg/Corporate/Guidelines"
     allowed_domains:
       - "www.ura.gov.sg"
+      - "ura.gov.sg"
     content_types:
       - "property_guidelines"
       - "development_rules"
@@ -35,6 +41,10 @@ sources:
     js_rendering: false
     crawl_delay: 2.0
     estimated_pages: 250
+    respect_robots_txt: true
+    target_prefixes:
+      - "/Corporate/Property"
+      - "/Corporate/Guidelines"
 
   iras:
     name: "Inland Revenue Authority of Singapore"
@@ -44,6 +54,7 @@ sources:
       - "https://www.iras.gov.sg/taxes/property-tax"
     allowed_domains:
       - "www.iras.gov.sg"
+      - "iras.gov.sg"
     content_types:
       - "stamp_duty"
       - "property_tax"
@@ -52,23 +63,32 @@ sources:
     js_rendering: false
     crawl_delay: 2.0
     estimated_pages: 120
+    respect_robots_txt: true
+    target_prefixes:
+      - "/taxes/stamp-duty"
+      - "/taxes/property-tax"
 
   mas:
     name: "Monetary Authority of Singapore"
     base_url: "https://www.mas.gov.sg"
     start_urls:
-      - "https://www.mas.gov.sg/regulation/regulations-and-guidance"
+      - "https://www.mas.gov.sg/regulations-and-financial-stability"
       - "https://www.mas.gov.sg/news"
     allowed_domains:
       - "www.mas.gov.sg"
+      - "mas.gov.sg"
     content_types:
       - "loan_limits"
       - "tdsr"
       - "ltv"
       - "mortgage_regulations"
-    js_rendering: false
+    js_rendering: true
     crawl_delay: 3.0
     estimated_pages: 80
+    respect_robots_txt: true
+    target_prefixes:
+      - "/regulation/regulations-and-guidance"
+      - "/news"
 
   cpf:
     name: "CPF Board"
@@ -77,6 +97,7 @@ sources:
       - "https://www.cpf.gov.sg/member/home-ownership"
     allowed_domains:
       - "www.cpf.gov.sg"
+      - "cpf.gov.sg"
     content_types:
       - "housing_scheme"
       - "withdrawal_limits"
@@ -84,3 +105,6 @@ sources:
     js_rendering: true
     crawl_delay: 2.0
     estimated_pages: 150
+    respect_robots_txt: true
+    target_prefixes:
+      - "/member/home-ownership"
