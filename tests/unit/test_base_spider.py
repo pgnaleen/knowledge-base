@@ -21,7 +21,6 @@ class TestSpider(BaseCrawler):
         item["raw_html"] = response.body
         item["raw_text"] = "Test content"
         item["content_hash"] = "abc123"
-        item["metadata_json"] = {}
         yield item
 
 

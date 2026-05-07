@@ -1,4 +1,11 @@
-"""S3/MinIO storage client."""
+"""S3/MinIO storage client — single bucket with prefix-based layout.
+
+Bucket: sg-property-kb
+  raw-html/{source}/{date}/{url_hash}.html
+  raw-pdf/{source}/{date}/{url_hash}.pdf
+  raw-text/{source}/{date}/{url_hash}.txt
+  processed/{source}/{date}/{url_hash}.txt
+"""
 
 from datetime import UTC, datetime
 
@@ -7,7 +14,6 @@ from botocore.config import Config
 
 from config.settings import settings
 
-# Module-level singleton — boto3 clients are thread-safe and connection-pooled
 _client = None
 
 
@@ -27,7 +33,7 @@ def get_s3_client():
 
 
 def upload_raw_html(source_code: str, url_hash: str, content: str) -> str:
-    """Upload raw HTML to S3. Returns the S3 key."""
+    """Upload raw HTML. Returns the S3 key (prefix included)."""
     date_str = datetime.now(UTC).strftime("%Y-%m-%d")
     key = f"raw-html/{source_code}/{date_str}/{url_hash}.html"
     get_s3_client().put_object(
@@ -40,7 +46,7 @@ def upload_raw_html(source_code: str, url_hash: str, content: str) -> str:
 
 
 def upload_raw_pdf(source_code: str, url_hash: str, content: bytes) -> str:
-    """Upload raw PDF to S3. Returns the S3 key."""
+    """Upload raw PDF. Returns the S3 key (prefix included)."""
     date_str = datetime.now(UTC).strftime("%Y-%m-%d")
     key = f"raw-pdf/{source_code}/{date_str}/{url_hash}.pdf"
     get_s3_client().put_object(
@@ -53,7 +59,7 @@ def upload_raw_pdf(source_code: str, url_hash: str, content: bytes) -> str:
 
 
 def upload_processed_text(source_code: str, url_hash: str, content: str) -> str:
-    """Upload processed/extracted text to S3. Returns the S3 key."""
+    """Upload processed/extracted text. Returns the S3 key (prefix included)."""
     date_str = datetime.now(UTC).strftime("%Y-%m-%d")
     key = f"processed/{source_code}/{date_str}/{url_hash}.txt"
     get_s3_client().put_object(
@@ -66,8 +72,8 @@ def upload_processed_text(source_code: str, url_hash: str, content: str) -> str:
 
 
 def upload_embeddings(batch_id: str, content: str) -> str:
-    """Upload a batch of embeddings (JSON) to S3. Returns the S3 key."""
-    key = f"embeddings/{batch_id}/embeddings.json"
+    """Upload a batch of embeddings (JSON). Returns the S3 key (prefix included)."""
+    key = f"processed/embeddings/{batch_id}.json"
     get_s3_client().put_object(
         Bucket=settings.s3_bucket,
         Key=key,
@@ -78,7 +84,7 @@ def upload_embeddings(batch_id: str, content: str) -> str:
 
 
 def download_from_s3(key: str) -> bytes:
-    """Download any object from S3 by key. Returns raw bytes."""
+    """Download any object from the single bucket by key. Returns raw bytes."""
     response = get_s3_client().get_object(Bucket=settings.s3_bucket, Key=key)
     return response["Body"].read()
 
@@ -87,33 +93,26 @@ class StorageClient:
     """S3/MinIO storage client wrapper with bucket management."""
 
     def __init__(self):
-        """Initialize storage client."""
         self.client = get_s3_client()
-        self.bucket = settings.s3_bucket
 
     def ensure_buckets(self) -> None:
-        """Ensure the required S3 bucket exists. Creates it if missing."""
+        """Ensure the single S3 bucket exists. Creates it if missing."""
         try:
-            self.client.head_bucket(Bucket=self.bucket)
-        except self.client.exceptions.NoSuchBucket:
-            self.client.create_bucket(Bucket=self.bucket)
+            self.client.head_bucket(Bucket=settings.s3_bucket)
+        except Exception:
+            self.client.create_bucket(Bucket=settings.s3_bucket)
 
     def upload_raw_html(self, source_code: str, url_hash: str, content: str) -> str:
-        """Upload raw HTML to S3. Returns the S3 key."""
         return upload_raw_html(source_code, url_hash, content)
 
     def upload_raw_pdf(self, source_code: str, url_hash: str, content: bytes) -> str:
-        """Upload raw PDF to S3. Returns the S3 key."""
         return upload_raw_pdf(source_code, url_hash, content)
 
     def upload_processed_text(self, source_code: str, url_hash: str, content: str) -> str:
-        """Upload processed/extracted text to S3. Returns the S3 key."""
         return upload_processed_text(source_code, url_hash, content)
 
     def upload_embeddings(self, batch_id: str, content: str) -> str:
-        """Upload a batch of embeddings (JSON) to S3. Returns the S3 key."""
         return upload_embeddings(batch_id, content)
 
     def download_from_s3(self, key: str) -> bytes:
-        """Download any object from S3 by key. Returns raw bytes."""
         return download_from_s3(key)

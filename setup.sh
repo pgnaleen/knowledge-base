@@ -77,12 +77,20 @@ step "Running Alembic migrations (inside app container)"
 app alembic upgrade head
 ok "Database schema created and 5 sources seeded"
 
-# ─── MinIO bucket ─────────────────────────────────────────────────────────────
+# ─── Sync sources config ──────────────────────────────────────────────────────
 
-step "Initialising MinIO storage bucket (inside app container)"
+step "Syncing sources config from sources.yml to database"
+
+app python -m config.sync_sources \
+    && ok "Source crawl config synced to DB (content_selectors, tag_config)" \
+    || warn "Source sync failed — check sources.yml format"
+
+# ─── MinIO buckets ────────────────────────────────────────────────────────────
+
+step "Initialising MinIO storage buckets (inside app container)"
 
 app python -c "from config.storage import StorageClient; StorageClient().ensure_buckets()" \
-    && ok "MinIO bucket ready" \
+    && ok "MinIO buckets ready: raw-html, raw-pdf, processed, embeddings" \
     || warn "MinIO bucket init failed — check S3_ENDPOINT in .env"
 
 # ─── Linting ──────────────────────────────────────────────────────────────────
@@ -123,8 +131,14 @@ echo "    KB-Pipeline-Postgres → localhost:5432  (kb_user / kb_pass / kb_pipel
 echo "    KB-Pipeline-Redis    → localhost:6379"
 echo "    KB-Pipeline-Minio    → localhost:9000 (API)  localhost:9001 (UI: minioadmin/minioadmin)"
 echo ""
+echo "  MinIO bucket (single bucket, prefix-based layout):"
+echo "    sg-property-kb/raw-html/  → raw HTML from crawlers"
+echo "    sg-property-kb/raw-pdf/   → raw PDF from crawlers"
+echo "    sg-property-kb/processed/ → processed text + embeddings"
+echo ""
 echo -e "  ${BOLD}How to run commands:${NC}"
 echo "    docker exec KB-Pipeline-App scrapy crawl hdb"
+echo "    docker exec KB-Pipeline-App python -m processors.runner"
 echo "    docker exec KB-Pipeline-App python -m pytest tests/unit/ -v"
 echo "    docker exec KB-Pipeline-App alembic upgrade head"
 echo "    docker exec KB-Pipeline-App ruff check ."
@@ -133,7 +147,8 @@ echo ""
 echo -e "  ${BOLD}Open a shell inside the container:${NC}"
 echo "    docker exec -it KB-Pipeline-App bash"
 echo ""
-echo "  Stop everything:  docker compose down"
+echo "  Stop everything:    docker compose down"
+echo "  Wipe all data:      docker compose down -v && bash setup.sh"
 echo ""
 echo "  Add API keys to .env before running crawlers:"
 echo "    OPENAI_API_KEY=sk-..."

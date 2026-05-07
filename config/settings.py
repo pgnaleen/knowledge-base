@@ -10,12 +10,12 @@ class Settings(BaseSettings):
     # Redis
     redis_url: str = "redis://localhost:6379/0"
 
-    # S3 / MinIO
+    # S3 / MinIO — single bucket with prefix-based layout
     s3_endpoint: str = "http://localhost:9000"
     s3_access_key: str = "minioadmin"
     s3_secret_key: str = "minioadmin"
-    s3_bucket: str = "kb-pipeline"
     s3_region: str = "us-east-1"
+    s3_bucket: str = "sg-property-kb"
 
     # OpenAI
     openai_api_key: str = ""

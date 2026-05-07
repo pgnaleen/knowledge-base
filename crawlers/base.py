@@ -70,6 +70,11 @@ class BaseCrawler(scrapy.Spider):
                     ]
                 yield response.follow(url, callback=self.handle_response, meta=meta)
 
+    @staticmethod
+    def _is_pdf_url(url: str) -> bool:
+        """Return True if the URL path ends with .pdf (ignores query strings)."""
+        return urlparse(url).path.lower().endswith(".pdf")
+
     def should_follow_link(self, url: str, allowed_domains: list[str]) -> bool:
         skip_exts = {
             ".css",

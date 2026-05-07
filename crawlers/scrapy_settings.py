@@ -21,6 +21,8 @@ USER_AGENT = settings.crawl_user_agent
 RETRY_ENABLED = True
 RETRY_TIMES = settings.crawl_max_retries
 RETRY_HTTP_CODES = [429, 500, 502, 503, 504]
+RETRY_BACKOFF_ENABLED = True
+RETRY_BACKOFF_MAX = 60
 
 PLAYWRIGHT_BROWSER_TYPE = "chromium"
 PLAYWRIGHT_LAUNCH_OPTIONS = {"headless": True, "args": ["--no-sandbox"]}

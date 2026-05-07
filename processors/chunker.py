@@ -1,5 +1,6 @@
 """Document chunking — splits ExtractedDocument into embeddable DocumentChunk objects."""
 
+import tiktoken
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from config.logger import get_logger
@@ -10,6 +11,7 @@ logger = get_logger("chunker")
 
 _DEFAULT_CHUNK_SIZE = 512
 _DEFAULT_CHUNK_OVERLAP = 64
+_enc = tiktoken.get_encoding("cl100k_base")
 
 
 class DocumentChunker:
@@ -59,6 +61,7 @@ class DocumentChunker:
                         source_name=doc.source_name,
                         content_type=doc.content_type,
                         word_count=len(piece.split()),
+                        token_count=len(_enc.encode(piece)),
                     )
                 )
                 counter += 1
@@ -85,6 +88,7 @@ class DocumentChunker:
                     source_name=doc.source_name,
                     content_type=doc.content_type,
                     word_count=len(md.split()),
+                    token_count=len(_enc.encode(md)),
                 )
             )
             counter += 1

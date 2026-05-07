@@ -4,6 +4,9 @@ from bs4 import BeautifulSoup
 
 from crawlers.base import BaseCrawler
 from crawlers.items import CrawlItem
+from config.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class IRASSpider(BaseCrawler):
@@ -17,43 +20,30 @@ class IRASSpider(BaseCrawler):
         return self.source_config.get("start_urls", [])
 
     def parse_document(self, response) -> Generator[CrawlItem, None, None]:
-        if response.url.endswith(".pdf"):
+        content_type_header = response.headers.get("Content-Type", b"").decode("utf-8", errors="ignore").lower()
+        is_pdf = self._is_pdf_url(response.url) or "application/pdf" in content_type_header
+
+        is_html = "text/html" in content_type_header
+
+        if is_pdf:
             yield CrawlItem(
                 url=response.url,
                 source_code=self.source_name,
                 content_type="pdf",
                 raw_pdf=response.body,
                 content_hash="",
-                metadata_json={"source": "iras", "type": "pdf"},
             )
-        else:
+        elif is_html:
             content = self.extract_main_content(response.text)
             if len(content) < 100:
                 return
-
-            title = self.extract_title(response.text)
-
-            tax_type = "stamp_duty" if "stamp" in response.url.lower() else "property_tax"
-            tax_types = [kw for kw in self.TAX_KEYWORDS if kw in content.lower()]
-
-            tables = self._extract_tables(response.text)
 
             yield CrawlItem(
                 url=response.url,
                 source_code=self.source_name,
                 content_type="html",
                 raw_html=response.body,
-
                 content_hash="",
-                metadata_json={
-                    "source": "iras",
-                    "type": "html",
-                    "title": title,
-                    "tax_type": tax_type,
-                    "tax_types": tax_types,
-                    "has_rate_tables": len(tables) > 0,
-                    "tables": tables,
-                },
             )
 
     def _extract_tables(self, html: str) -> list[dict]:
@@ -76,7 +66,7 @@ class IRASSpider(BaseCrawler):
         if not super().should_follow_link(url, allowed_domains):
             return False
 
-        if url.endswith(".pdf"):
+        if self._is_pdf_url(url):
             return True
 
         iras_paths = {"/taxes/stamp-duty", "/taxes/property-tax"}

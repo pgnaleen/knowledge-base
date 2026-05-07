@@ -2,6 +2,9 @@ from collections.abc import Generator
 
 from crawlers.base import BaseCrawler
 from crawlers.items import CrawlItem
+from config.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class CPFSpider(BaseCrawler):
@@ -16,67 +19,53 @@ class CPFSpider(BaseCrawler):
     }
 
     CPF_KEYWORDS = {
-        "bdb": "first-time_buyer",
-        "sls": "second_property",
-        "home_protection": "protection_scheme",
+        "enhanced housing grant": "first-time_buyer",
+        "ehg": "first-time_buyer",
+        "family grant": "first-time_buyer",
+        "home protection scheme": "protection_scheme",
+        "hps": "protection_scheme",
+        "second property": "second_property",
+        "accrued interest": "accrued_interest",
+        "ordinary account": "ordinary_account",
+        "cpf withdrawal": "cpf_withdrawal",
     }
 
     def get_start_urls(self) -> list[str]:
         return self.source_config.get("start_urls", [])
 
     def parse_document(self, response) -> Generator[CrawlItem, None, None]:
-        if response.url.endswith(".pdf"):
+        content_type_header = response.headers.get("Content-Type", b"").decode("utf-8", errors="ignore").lower()
+        is_pdf = self._is_pdf_url(response.url) or "application/pdf" in content_type_header
+
+        is_html = "text/html" in content_type_header
+
+        if is_pdf:
             yield CrawlItem(
                 url=response.url,
                 source_code=self.source_name,
                 content_type="pdf",
                 raw_pdf=response.body,
                 content_hash="",
-                metadata_json={"source": "cpf", "type": "pdf"},
             )
-        else:
+        elif is_html:
             content = self.extract_main_content(response.text)
             if len(content) < 100:
                 return
-
-            title = self.extract_title(response.text)
-
-            property_types = []
-            if "hdb" in content.lower():
-                property_types.append("hdb")
-            if "private" in content.lower() or "condominium" in content.lower():
-                property_types.append("private")
-            if "ec " in content.lower() or "executive condominium" in content.lower():
-                property_types.append("ec")
-
-            citizenship_types = []
-            if "singapore citizen" in content.lower():
-                citizenship_types.append("SC")
-            if "permanent resident" in content.lower():
-                citizenship_types.append("PR")
-
-            topics = [v for k, v in self.CPF_KEYWORDS.items() if k.lower() in content.lower()]
 
             yield CrawlItem(
                 url=response.url,
                 source_code=self.source_name,
                 content_type="html",
                 raw_html=response.body,
-
                 content_hash="",
-                metadata_json={
-                    "source": "cpf",
-                    "type": "html",
-                    "title": title,
-                    "property_types": property_types,
-                    "citizenship_types": citizenship_types,
-                    "topics": topics,
-                },
             )
 
     def should_follow_link(self, url: str, allowed_domains: list[str]) -> bool:
         if not super().should_follow_link(url, allowed_domains):
             return False
+
+        if self._is_pdf_url(url):
+            return True
 
         url_lower = url.lower()
 
@@ -90,8 +79,5 @@ class CPFSpider(BaseCrawler):
             ]
         ):
             return False
-
-        if url.endswith(".pdf"):
-            return True
 
         return any(section.lower() in url_lower for section in self.CPF_SECTIONS)

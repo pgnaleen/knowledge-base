@@ -107,6 +107,7 @@ All backing services have health checks; the `app` container waits for all three
 
 - JS-rendered pages: use Playwright for HDB (`/residential/*`) and CPF (`/member/home-ownership`).
 - Crawler blocking: polite delays 2–5 s, rotate user agents.
+- Retry backoff: exponential backoff enabled (Scrapy `RETRY_BACKOFF_ENABLED`) with 60s cap. Retries on 429, 5xx errors — prevents hammering failing servers.
 - PDF extraction: pdfplumber first, PyMuPDF fallback; flag scanned PDFs for OCR queue.
 - Pinecone namespaces per source: `hdb`, `ura`, `iras`, `mas`, `cpf` + `all` (unified).
 - pgvector index: `HNSW ef_construction=128 m=16`, dimension 3072.

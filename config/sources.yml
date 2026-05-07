@@ -24,6 +24,32 @@ sources:
       - "/buying-a-flat"
       - "/managing-my-home"
       - "/renting-a-flat"
+    content_selectors:
+      - "main#main-content"
+      - "div.hdb-content"
+      - "main"
+      - "article"
+    tag_config:
+      property_type:
+        HDB: ["hdb flat", "hdb"]
+        private: ["private residential", "condominium", "condo"]
+        EC: ["executive condominium", "ec "]
+        commercial: ["commercial property", "industrial"]
+      citizenship:
+        SC: ["singapore citizen"]
+        PR: ["permanent resident", "pr"]
+        foreigner: ["foreigner", "non-resident", "non-citizen"]
+      topic:
+        stamp_duty: ["stamp duty", "absd", "bsd", "ssd"]
+        ltv: ["loan-to-value", "ltv"]
+        tdsr: ["tdsr", "total debt servicing"]
+        msr: ["msr", "mortgage servicing ratio"]
+        housing_grant: ["ehg", "phg", "family grant", "proximity housing grant"]
+        eligibility: ["eligibility"]
+        first_time_buyer: ["first-time", "first time"]
+        cooling_measure: ["cooling measure"]
+        property_tax: ["property tax"]
+        rental: ["rental", "rent"]
 
   ura:
     name: "Urban Redevelopment Authority"
@@ -45,6 +71,25 @@ sources:
     target_prefixes:
       - "/Corporate/Property"
       - "/Corporate/Guidelines"
+    content_selectors:
+      - "div.mainWrap"
+      - "div.fullbody-wrapper"
+      - "div.text-cms-col"
+      - "main"
+      - "article"
+    tag_config:
+      property_type:
+        private: ["private residential", "private property", "condominium", "landed residential"]
+        commercial: ["commercial property", "industrial"]
+      citizenship:
+        SC: ["singapore citizen"]
+        PR: ["permanent resident"]
+        foreigner: ["foreigner", "non-resident"]
+      topic:
+        stamp_duty: ["stamp duty", "absd", "bsd"]
+        property_tax: ["property tax"]
+        eligibility: ["eligibility"]
+        development: ["development", "planning", "guideline"]
 
   iras:
     name: "Inland Revenue Authority of Singapore"
@@ -67,6 +112,22 @@ sources:
     target_prefixes:
       - "/taxes/stamp-duty"
       - "/taxes/property-tax"
+    content_selectors:
+      - "div.sfContentBlock"
+      - "article.content"
+      - "main"
+      - "article"
+    tag_config:
+      property_type:
+        all: []
+      citizenship:
+        SC: ["singapore citizen"]
+        PR: ["permanent resident"]
+      topic:
+        stamp_duty: ["stamp duty", "absd", "bsd", "ssd", "additional buyer", "seller stamp duty"]
+        property_tax: ["property tax", "annual value"]
+        ltv: ["loan-to-value", "ltv"]
+        eligibility: ["eligibility", "relief"]
 
   mas:
     name: "Monetary Authority of Singapore"
@@ -89,6 +150,23 @@ sources:
     target_prefixes:
       - "/regulation/regulations-and-guidance"
       - "/news"
+    content_selectors:
+      - "div.mas-content"
+      - "div#content"
+      - "main"
+      - "article"
+    tag_config:
+      property_type:
+        residential: ["residential property", "housing loan"]
+        commercial: ["commercial property"]
+      citizenship:
+        all: []
+      topic:
+        ltv: ["loan-to-value", "ltv"]
+        tdsr: ["tdsr", "total debt servicing"]
+        msr: ["msr", "mortgage servicing ratio"]
+        mortgage: ["mortgage", "housing loan", "residential property"]
+        eligibility: ["eligibility", "criterion"]
 
   cpf:
     name: "CPF Board"
@@ -108,3 +186,23 @@ sources:
     respect_robots_txt: true
     target_prefixes:
       - "/member/home-ownership"
+    content_selectors:
+      - "div#cpf-content"
+      - "main"
+      - "article"
+    tag_config:
+      property_type:
+        HDB: ["hdb flat", "hdb"]
+        private: ["private residential", "condominium", "private property"]
+        EC: ["executive condominium", "ec "]
+      citizenship:
+        SC: ["singapore citizen"]
+        PR: ["permanent resident"]
+      topic:
+        housing_grant: ["enhanced housing grant", "ehg", "family grant", "housing grant"]
+        housing_scheme: ["housing scheme", "cpf housing"]
+        cpf_withdrawal: ["cpf withdrawal", "ordinary account", "accrued interest"]
+        first_time_buyer: ["first-time", "first time", "first timer"]
+        eligibility: ["eligibility", "eligible"]
+        protection_scheme: ["home protection scheme", "hps"]
+        second_property: ["second property"]
