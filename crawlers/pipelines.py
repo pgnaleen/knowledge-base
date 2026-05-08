@@ -49,7 +49,11 @@ def _merge_tables_into_text(text: str, tables: list) -> str:
 
 
 class S3Pipeline:
-    def process_item(self, item, spider):
+    @classmethod
+    def from_crawler(cls, crawler):
+        return cls()
+
+    def process_item(self, item):
         try:
             url_hash = hashlib.md5(item["url"].encode()).hexdigest()[:12]
             html_extractor = HTMLExtractor()
@@ -129,13 +133,21 @@ class S3Pipeline:
 
 
 class PostgresPipeline:
-    def open_spider(self, spider):
+    @classmethod
+    def from_crawler(cls, crawler):
+        return cls(stats=crawler.stats)
+
+    def __init__(self, stats=None):
+        self.stats = stats
+        self.db = None
+
+    def open_spider(self):
         self.db = SessionLocal()
 
-    def close_spider(self, spider):
+    def close_spider(self):
         self.db.close()
 
-    def process_item(self, item, spider):
+    def process_item(self, item):
         try:
             source = self.db.query(Source).filter_by(code=item["source_code"]).first()
             if not source:
@@ -169,6 +181,8 @@ class PostgresPipeline:
                     existing.extraction_flags = item.get("extraction_flags")
                     existing.status = "pending"
                     self.db.commit()
+                    if self.stats:
+                        self.stats.inc_value("pages_changed")
                     logger.info("Updated document", url=item["url"], source=item["source_code"])
                 else:
                     logger.info("Skipped unchanged", url=item["url"], source=item["source_code"])
@@ -186,6 +200,8 @@ class PostgresPipeline:
                 )
                 self.db.add(doc)
                 self.db.commit()
+                if self.stats:
+                    self.stats.inc_value("pages_new")
                 logger.info("Created document", url=item["url"], source=item["source_code"])
 
             return item

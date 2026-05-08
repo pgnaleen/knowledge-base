@@ -16,6 +16,10 @@ Usage:
     # Crawl only (no processing or embedding)
     python run_pipeline.py --crawl-only
 
+    # Crawl only with Scrapy settings (e.g. page limit for testing)
+    python run_pipeline.py --crawl-only -S CLOSESPIDER_PAGECOUNT=10
+    python run_pipeline.py hdb --crawl-only -S CLOSESPIDER_PAGECOUNT=10
+
     # Crawl + process, skip embedding
     python run_pipeline.py --skip-embed
 """
@@ -28,8 +32,32 @@ from config.settings import settings
 logger = get_logger("pipeline")
 
 
+def _parse_scrapy_settings(args: list[str]) -> tuple[dict, list[str]]:
+    """Extract -S KEY=VALUE pairs from args; return (settings_dict, remaining_args)."""
+    scrapy_settings: dict = {}
+    remaining: list[str] = []
+    i = 0
+    while i < len(args):
+        if args[i] == "-S" and i + 1 < len(args):
+            key, _, value = args[i + 1].partition("=")
+            scrapy_settings[key] = value
+            i += 2
+        elif args[i].startswith("-S") and "=" in args[i]:
+            # handle -SKEY=VALUE form
+            pair = args[i][2:]
+            key, _, value = pair.partition("=")
+            scrapy_settings[key] = value
+            i += 1
+        else:
+            remaining.append(args[i])
+            i += 1
+    return scrapy_settings, remaining
+
+
 def main():
     args = sys.argv[1:]
+
+    scrapy_settings, args = _parse_scrapy_settings(args)
 
     crawl_only = "--crawl-only" in args
     process_only = "--process-only" in args
@@ -54,7 +82,7 @@ def main():
         from crawlers.runner import run_crawlers
 
         logger.info("stage_crawl_start", sources=source_codes or "all")
-        run_crawlers(source_codes=source_codes)
+        run_crawlers(source_codes=source_codes, scrapy_settings=scrapy_settings)
         logger.info("stage_crawl_complete")
 
     # ── Stage 2: Extract → Chunk → Validate → Save ────────────────────────────

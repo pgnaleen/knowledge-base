@@ -81,7 +81,6 @@ class ProcessedChunk(Base):
     document_id = Column(UUID(as_uuid=True), ForeignKey("raw_documents.id"), nullable=False)
     chunk_text = Column(Text, nullable=False)
     chunk_index = Column(Integer, nullable=False)  # Sequential within document, 0-based
-    heading_path = Column(String(1000))  # Nullable — not all documents have headings
     token_count = Column(Integer)
     embedding_id = Column(String(100))  # ID in vector store
     embedding = Column(Vector(3072))  # pgvector fallback storage
@@ -119,7 +118,6 @@ class CrawlJob(Base):
     started_at = Column(DateTime, server_default=func.now())
     completed_at = Column(DateTime)
     error_message = Column(Text)
-    metadata_json = Column(JSON, default=dict)
 
     source = relationship("Source")
 

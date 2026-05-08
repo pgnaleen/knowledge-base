@@ -41,7 +41,7 @@ _UNPROCESSED_DOCS_SQL = """
 
 # Fetch processed_chunks not yet embedded.
 _UNEMBEDDED_CHUNKS_SQL = """
-    SELECT pc.id, pc.chunk_text, pc.chunk_index, pc.heading_path,
+    SELECT pc.id, pc.chunk_text, pc.chunk_index,
            pc.metadata_json, rd.url AS source_url, s.code AS source_code
     FROM processed_chunks pc
     JOIN raw_documents rd ON pc.document_id = rd.id
@@ -159,18 +159,14 @@ class EmbeddingPipeline:
         chunks: list[DocumentChunk] = []
 
         for row in rows:
-            chunk_id, chunk_text_val, chunk_index, heading_path, metadata_json, source_url, src_code = row
+            chunk_id, chunk_text_val, chunk_index, metadata_json, source_url, src_code = row
             db_ids.append(chunk_id)
-            try:
-                hp = json.loads(heading_path) if heading_path else []
-            except (TypeError, json.JSONDecodeError):
-                hp = []
             chunks.append(
                 DocumentChunk(
                     chunk_text=chunk_text_val,
                     chunk_index=chunk_index,
                     chunk_type=(metadata_json or {}).get("chunk_type", "text"),
-                    heading_path=hp,
+                    heading_path=[],
                     metadata=metadata_json or {},
                     source_url=source_url or "",
                     source_name=src_code,
@@ -273,15 +269,14 @@ class EmbeddingPipeline:
         with self._engine.begin() as conn:
             for chunk in result.valid_chunks:
                 token_count = len(_TIKTOKEN.encode(chunk.chunk_text))
-                heading_path_json = json.dumps(chunk.heading_path)
                 conn.execute(
                     text("""
                         INSERT INTO processed_chunks
                             (id, document_id, chunk_text, chunk_index, total_chunks,
-                             heading_path, token_count, metadata_json)
+                             token_count, metadata_json)
                         VALUES
                             (:id, :document_id, :chunk_text, :chunk_index, :total_chunks,
-                             :heading_path, :token_count, CAST(:metadata_json AS JSON))
+                             :token_count, CAST(:metadata_json AS JSON))
                         """),
                     {
                         "id": uuid.uuid4(),
@@ -289,7 +284,6 @@ class EmbeddingPipeline:
                         "chunk_text": chunk.chunk_text,
                         "chunk_index": chunk.chunk_index,
                         "total_chunks": total,
-                        "heading_path": heading_path_json,
                         "token_count": token_count,
                         "metadata_json": json.dumps(chunk.metadata),
                     },

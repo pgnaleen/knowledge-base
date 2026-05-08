@@ -74,12 +74,10 @@ def process_pending_documents():
                 db.query(ProcessedChunk).filter_by(document_id=doc.id).delete()
 
                 for chunk in result.valid_chunks:
-                    heading_str = " > ".join(h["text"] for h in chunk.heading_path) or None
                     db.add(ProcessedChunk(
                         document_id=doc.id,
                         chunk_text=chunk.chunk_text,
                         chunk_index=chunk.chunk_index,
-                        heading_path=heading_str,
                         token_count=chunk.token_count,
                         metadata_json=chunk.metadata,
                     ))
