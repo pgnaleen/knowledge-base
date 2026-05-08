@@ -35,6 +35,7 @@ ITEM_PIPELINES = {
 }
 
 LOG_LEVEL = settings.log_level
+LOGSTATS_INTERVAL = 15  # Log crawl progress every 15s instead of 60s
 FEED_EXPORT_ENCODING = "utf-8"
 REQUEST_FINGERPRINTER_IMPLEMENTATION = "2.7"
 TELNETCONSOLE_ENABLED = False

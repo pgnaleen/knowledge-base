@@ -66,7 +66,7 @@ class TestS3Pipeline:
             mock_extract.return_value = mock_doc
             mock_upload.return_value = "raw-html/hdb/2026-05-06/abc.html"
 
-            result = pipeline.process_item(html_item, None)
+            result = pipeline.process_item(html_item)
 
             expected_hash = hashlib.sha256(b"Hello World").hexdigest()
             assert result["content_hash"] == expected_hash
@@ -81,7 +81,7 @@ class TestS3Pipeline:
             mock_extract.return_value = mock_doc
             mock_upload.return_value = "raw-html/hdb/2026-05-06/abc.html"
 
-            result = pipeline.process_item(html_item, None)
+            result = pipeline.process_item(html_item)
 
             assert result["s3_path"] == "raw-html/hdb/2026-05-06/abc.html"
 
@@ -94,7 +94,7 @@ class TestS3Pipeline:
             mock_extract.return_value = mock_doc
             mock_upload.return_value = "raw-html/hdb/2026-05-06/abc.html"
 
-            result = pipeline.process_item(html_item, None)
+            result = pipeline.process_item(html_item)
 
             assert result["raw_text"] == "Eligibility\nYou must be a Singapore Citizen\n\nIncome Ceiling\nHousehold income must not exceed $14,000"
 
@@ -105,7 +105,7 @@ class TestS3Pipeline:
             mock_extract.side_effect = Exception("Extraction failed")
             mock_upload.return_value = "raw-html/hdb/2026-05-06/abc.html"
 
-            result = pipeline.process_item(html_item, None)
+            result = pipeline.process_item(html_item)
 
             assert result["raw_text"] == ""
             assert result["content_hash"] == hashlib.sha256(b"").hexdigest()
@@ -121,7 +121,7 @@ class TestS3Pipeline:
             mock_extract.return_value = mock_doc
             mock_upload.return_value = "raw-pdf/cpf/2026-05-06/abc.pdf"
 
-            result = pipeline.process_item(pdf_item, None)
+            result = pipeline.process_item(pdf_item)
 
             assert result["s3_path"] == "raw-pdf/cpf/2026-05-06/abc.pdf"
             expected_hash = hashlib.sha256(b"PDF Content").hexdigest()
@@ -162,7 +162,7 @@ class TestPostgresPipeline:
             MagicMock(first=lambda: mock_existing_doc),
         ]
 
-        result = pipeline.process_item(sample_item, None)
+        result = pipeline.process_item(sample_item)
 
         assert result is sample_item
         pipeline.db.add.assert_not_called()
@@ -178,7 +178,7 @@ class TestPostgresPipeline:
             MagicMock(first=lambda: None),  # no URL match
         ]
 
-        pipeline.process_item(sample_item, None)
+        pipeline.process_item(sample_item)
 
         pipeline.db.add.assert_called_once()
         doc = pipeline.db.add.call_args[0][0]
@@ -202,7 +202,7 @@ class TestPostgresPipeline:
             MagicMock(first=lambda: mock_existing), # URL match
         ]
 
-        pipeline.process_item(sample_item, None)
+        pipeline.process_item(sample_item)
 
         pipeline.db.commit.assert_called()
         assert mock_existing.raw_text == "Document content here"
@@ -224,6 +224,6 @@ class TestPostgresPipeline:
             MagicMock(first=lambda: mock_existing), # URL match, same hash
         ]
 
-        pipeline.process_item(sample_item, None)
+        pipeline.process_item(sample_item)
 
         pipeline.db.add.assert_not_called()

@@ -44,7 +44,7 @@ class ChunkValidator:
     """
 
     MIN_TOKENS: int = 50
-    MAX_TOKENS: int = 600
+    MAX_TOKENS: int = 512
     VALID_CHUNK_TYPES: frozenset[str] = frozenset({"text", "table"})
     REQUIRED_METADATA_KEYS: frozenset[str] = frozenset(
         {"source_agency", "chunk_type", "chunk_index"}
@@ -70,6 +70,7 @@ class ChunkValidator:
 
         for new_idx, chunk in enumerate(valid):
             chunk.chunk_index = new_idx
+            chunk.metadata["chunk_index"] = new_idx
 
         logger.debug(
             "validator.result",

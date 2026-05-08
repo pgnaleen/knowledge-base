@@ -1,6 +1,7 @@
 """Pinecone vector store — upserts embeddings into source namespaces."""
 
 from pinecone import Pinecone, ServerlessSpec
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 from config.logger import get_logger
 from config.settings import settings
@@ -26,6 +27,7 @@ class PineconeStore:
     ) -> None:
         self._pc = Pinecone(api_key=api_key or settings.pinecone_api_key)
         self._index_name = index_name or settings.pinecone_index
+        self.ensure_index()
         self._index = self._pc.Index(self._index_name)
 
     def ensure_index(self, dimension: int = 3072, metric: str = "cosine") -> None:
@@ -79,16 +81,20 @@ class PineconeStore:
         for namespace, vectors in by_namespace.items():
             for i in range(0, len(vectors), _PINECONE_UPSERT_BATCH):
                 batch = vectors[i : i + _PINECONE_UPSERT_BATCH]
-                resp = self._index.upsert(vectors=batch, namespace=namespace)
-                total_upserted += getattr(resp, "upserted_count", len(batch))
+                self._upsert_batch(batch, namespace)
+                total_upserted += len(batch)
 
         logger.info(
             "pinecone_store.upserted",
             chunks=len(results),
             namespaces=list(by_namespace.keys()),
-            total_upserted=total_upserted,
+            total_upserted=total_upserted,  # len(results) * 2 — source namespace + "all"
         )
         return id_map
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30), reraise=True)
+    def _upsert_batch(self, batch: list[dict], namespace: str) -> None:
+        self._index.upsert(vectors=batch, namespace=namespace)
 
     @staticmethod
     def _build_metadata(result: EmbeddingResult) -> dict:

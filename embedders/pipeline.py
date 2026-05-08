@@ -5,6 +5,8 @@ import json
 import uuid
 from datetime import date
 
+import openai
+
 import tiktoken
 from sqlalchemy import bindparam, text
 
@@ -175,7 +177,15 @@ class EmbeddingPipeline:
                 )
             )
 
-        results = self._embedding_service.embed_chunks(chunks)
+        try:
+            results = self._embedding_service.embed_chunks(chunks)
+        except openai.AuthenticationError as exc:
+            logger.error(
+                "pipeline.openai_auth_failed",
+                error=str(exc),
+                hint="Check that OPENAI_API_KEY is set and not expired. Chunks remain unembedded and will be retried on next run.",
+            )
+            return 0
 
         id_map: dict = {}
         if self._pinecone_store is not None:

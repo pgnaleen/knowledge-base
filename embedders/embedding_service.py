@@ -2,9 +2,10 @@
 
 from typing import Iterator
 
+import openai
 import tiktoken
 from openai import OpenAI
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_not_exception_type, stop_after_attempt, wait_exponential
 
 from config.logger import get_logger
 from config.settings import settings
@@ -71,6 +72,7 @@ class EmbeddingService:
         return results
 
     @retry(
+        retry=retry_if_not_exception_type(openai.AuthenticationError),
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=30),
         reraise=True,

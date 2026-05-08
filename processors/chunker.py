@@ -33,6 +33,7 @@ class DocumentChunker:
             encoding_name="cl100k_base",
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
+            separators=["\n\n", "\n", " "],
         )
 
     def chunk(

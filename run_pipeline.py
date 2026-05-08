@@ -26,6 +26,10 @@ Usage:
 
 import sys
 
+# Force unbuffered stdout/stderr so logs appear immediately in Docker
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
+
 from config.logger import get_logger
 from config.settings import settings
 
