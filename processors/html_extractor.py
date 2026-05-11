@@ -64,6 +64,8 @@ class HTMLExtractor:
         if not html:
             raise ExtractionError("html input is empty")
 
+        logger.info("html.started", source_url=source_url, source_name=source_name)
+
         warnings: list[str] = []
 
         try:
@@ -94,8 +96,8 @@ class HTMLExtractor:
 
         word_count = len(text.split()) if text.strip() else 0
 
-        logger.debug(
-            "html_extractor.extracted",
+        logger.info(
+            "html.extracted",
             source_url=source_url,
             source_name=source_name,
             word_count=word_count,

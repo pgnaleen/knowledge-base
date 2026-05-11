@@ -21,7 +21,7 @@ def sync_sources_config():
         for source_code, source_cfg in sources_config.items():
             source = db.query(Source).filter_by(code=source_code).first()
             if not source:
-                logger.warning("Source not found in DB", source_code=source_code)
+                logger.warning("sync.source_not_found", source_code=source_code)
                 continue
 
             # Extract config keys needed for processors (selectors, tags)
@@ -33,12 +33,12 @@ def sync_sources_config():
 
             source.crawl_config = crawl_config
             db.commit()
-            logger.info("Synced source config", source_code=source_code)
+            logger.info("sync.source_done", source_code=source_code)
 
-        logger.info("Source config sync complete")
+        logger.info("sync.complete")
 
     except Exception as e:
-        logger.error("Failed to sync sources", error=str(e))
+        logger.error("sync.failed", error=str(e))
         db.rollback()
         raise
     finally:

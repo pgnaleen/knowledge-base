@@ -25,6 +25,9 @@ Usage:
 """
 
 import sys
+import uuid
+
+import structlog
 
 # Force unbuffered stdout/stderr so logs appear immediately in Docker
 sys.stdout.reconfigure(line_buffering=True)
@@ -34,6 +37,44 @@ from config.logger import get_logger
 from config.settings import settings
 
 logger = get_logger("pipeline")
+
+
+def _banner(title: str) -> None:
+    """Print a visual stage separator banner."""
+    pad = "═" * ((56 - len(title) - 2) // 2)
+    print(f"\n{pad} {title} {pad}\n", flush=True)
+
+
+def _print_crawl_summary(summary: list[dict]) -> None:
+    """Print a formatted per-source crawl summary table."""
+    if not summary:
+        print("\n(no crawl data — sources may not be seeded in DB)\n", flush=True)
+        return
+
+    cols = ["source", "pages_found", "pages_new", "pages_changed", "pages_deleted", "pages_errored"]
+    headers = ["Source", "Found", "New", "Updated", "Deleted", "Errored"]
+
+    widths = [
+        max(len(h), max(len(str(row[c])) for row in summary))
+        for h, c in zip(headers, cols)
+    ]
+
+    def _row(values: list) -> str:
+        return "  ".join(str(v).ljust(w) for v, w in zip(values, widths))
+
+    divider = "─" * (sum(widths) + 2 * (len(widths) - 1))
+    title = "CRAWL SUMMARY"
+    print(f"\n{'═' * len(divider)}", flush=True)
+    print(f"{title:^{len(divider)}}", flush=True)
+    print(divider, flush=True)
+    print(_row(headers), flush=True)
+    print(divider, flush=True)
+    for row in summary:
+        print(_row([row[c] for c in cols]), flush=True)
+    print(divider, flush=True)
+    totals = [sum(row[c] for row in summary) for c in cols[1:]]
+    print(_row(["TOTAL"] + totals), flush=True)
+    print(f"{'═' * len(divider)}\n", flush=True)
 
 
 def _parse_scrapy_settings(args: list[str]) -> tuple[dict, list[str]]:
@@ -59,6 +100,9 @@ def _parse_scrapy_settings(args: list[str]) -> tuple[dict, list[str]]:
 
 
 def main():
+    run_id = str(uuid.uuid4())[:8]
+    structlog.contextvars.bind_contextvars(run_id=run_id)
+
     args = sys.argv[1:]
 
     scrapy_settings, args = _parse_scrapy_settings(args)
@@ -74,7 +118,7 @@ def main():
     do_embed = not crawl_only and not skip_embed
 
     logger.info(
-        "pipeline_starting",
+        "pipeline.started",
         sources=source_codes or "all",
         crawl=do_crawl,
         process=do_process,
@@ -85,23 +129,27 @@ def main():
     if do_crawl:
         from crawlers.runner import run_crawlers
 
-        logger.info("stage_crawl_start", sources=source_codes or "all")
-        run_crawlers(source_codes=source_codes, scrapy_settings=scrapy_settings)
-        logger.info("stage_crawl_complete")
+        _banner("STAGE 1: CRAWL")
+        logger.info("stage.crawl_started", sources=source_codes or "all")
+        crawl_summary = run_crawlers(source_codes=source_codes, scrapy_settings=scrapy_settings)
+        logger.info("stage.crawl_done")
+        _print_crawl_summary(crawl_summary)
 
     # ── Stage 2: Extract → Chunk → Validate → Save ────────────────────────────
     if do_process:
         from processors.runner import process_pending_documents
 
-        logger.info("stage_process_start")
+        _banner("STAGE 2: PROCESS")
+        logger.info("stage.process_started")
         process_pending_documents()
-        logger.info("stage_process_complete")
+        logger.info("stage.process_done")
 
     # ── Stage 3: Embed → Pinecone / pgvector ──────────────────────────────────
     if do_embed:
         from embedders.pipeline import EmbeddingPipeline
 
-        logger.info("stage_embed_start")
+        _banner("STAGE 3: EMBED")
+        logger.info("stage.embed_started")
         pipeline = EmbeddingPipeline(
             openai_api_key=settings.openai_api_key or None,
             pinecone_api_key=settings.pinecone_api_key or None,
@@ -109,10 +157,10 @@ def main():
         )
         for code in (source_codes or [None]):
             stats = pipeline.embed_chunks(source_code=code)
-            logger.info("stage_embed_source_complete", source=code or "all", embedded=stats)
-        logger.info("stage_embed_complete")
+            logger.info("stage.embed_source_done", source=code or "all", embedded=stats)
+        logger.info("stage.embed_done")
 
-    logger.info("pipeline_complete")
+    logger.info("pipeline.done")
 
 
 if __name__ == "__main__":

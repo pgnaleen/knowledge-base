@@ -2,6 +2,7 @@
 
 import traceback
 
+import structlog
 from sqlalchemy.orm import Session
 
 from config.database import SessionLocal
@@ -24,97 +25,109 @@ def process_pending_documents():
 
     try:
         pending_docs = db.query(RawDocument).filter(RawDocument.status == "pending").all()
-        logger.info("Starting processing batch", doc_count=len(pending_docs))
+        logger.info("process.batch_start", doc_count=len(pending_docs))
 
         success_count = 0
         failure_count = 0
 
         for doc in pending_docs:
-            logger.info("Processing document", doc_id=str(doc.id), url=doc.url)
+            source_name = doc.source.code if doc.source else "unknown"
+            structlog.contextvars.bind_contextvars(source=source_name, url=doc.url)
 
-            if doc.status == "processed":
-                existing_chunks = db.query(ProcessedChunk).filter_by(document_id=doc.id).count()
-                if existing_chunks > 0:
-                    logger.info("Skipping already-processed document", doc_id=str(doc.id), chunk_count=existing_chunks)
-                    continue
-
-            extracted_doc: ExtractedDocument | None = None
             try:
-                source_name = doc.source.code if doc.source else ""
-                source_agency = doc.source.name if doc.source else ""
-                crawl_config = doc.source.crawl_config or {} if doc.source else {}
-                tag_config = crawl_config.get("tag_config")
+                logger.info("process.doc_start", doc_id=str(doc.id))
 
-                # Build ExtractedDocument directly from raw_text (already extracted in Pipeline 1)
-                # No S3 download needed — raw_text is stored in DB from crawl time
-                if not doc.raw_text:
-                    raise ValueError("Document has no raw_text — extraction failed at crawl time.")
+                if doc.status == "processed":
+                    existing_chunks = db.query(ProcessedChunk).filter_by(document_id=doc.id).count()
+                    if existing_chunks > 0:
+                        logger.info("process.doc_skipped", doc_id=str(doc.id), chunk_count=existing_chunks)
+                        continue
 
-                extracted_doc = ExtractedDocument(
-                    title="",
-                    text=doc.raw_text,  # Already contains tables as markdown inline
-                    headings=[],  # Heading structure not preserved in raw_text
-                    tables=[],    # Tables already merged inline as markdown
-                    source_url=doc.url,
-                    source_name=source_name,
-                    content_type=doc.content_type or "html",
-                    word_count=len(doc.raw_text.split()),
-                    extraction_warnings=[],
-                )
+                extracted_doc: ExtractedDocument | None = None
+                try:
+                    source_name = doc.source.code if doc.source else ""
+                    source_agency = doc.source.name if doc.source else ""
+                    crawl_config = doc.source.crawl_config or {} if doc.source else {}
+                    tag_config = crawl_config.get("tag_config")
 
-                metadata = metadata_extractor.extract(
-                    extracted_doc,
-                    source_agency=source_agency,
-                    tag_config=tag_config,
-                )
+                    # Build ExtractedDocument directly from raw_text (already extracted in Pipeline 1)
+                    # No S3 download needed — raw_text is stored in DB from crawl time
+                    if not doc.raw_text:
+                        raise ValueError("Document has no raw_text — extraction failed at crawl time.")
 
-                chunks = chunker.chunk(extracted_doc, metadata)
-                result = validator.validate(chunks)
+                    extraction_flags = doc.extraction_flags or {}
+                    extracted_doc = ExtractedDocument(
+                        title=extraction_flags.get("title", ""),
+                        text=doc.raw_text,  # Already contains tables as markdown inline
+                        headings=extraction_flags.get("headings", []),  # Restored from extraction_flags
+                        tables=[],    # Tables already merged inline as markdown
+                        source_url=doc.url,
+                        source_name=source_name,
+                        content_type=doc.content_type or "html",
+                        word_count=len(doc.raw_text.split()),
+                        extraction_warnings=extraction_flags.get("warnings", []),
+                    )
 
-                db.query(ProcessedChunk).filter_by(document_id=doc.id).delete()
+                    metadata = metadata_extractor.extract(
+                        extracted_doc,
+                        source_agency=source_agency,
+                        tag_config=tag_config,
+                    )
 
-                for chunk in result.valid_chunks:
-                    db.add(ProcessedChunk(
-                        document_id=doc.id,
-                        chunk_text=chunk.chunk_text,
-                        chunk_index=chunk.chunk_index,
-                        token_count=chunk.token_count,
-                        metadata_json=chunk.metadata,
-                    ))
+                    chunks = chunker.chunk(extracted_doc, metadata)
+                    result = validator.validate(chunks)
 
-                for issue in result.issues:
-                    if issue.severity == "error":
-                        logger.warning(
-                            "chunk_filtered",
-                            url=doc.url,
-                            chunk_index=issue.chunk_index,
-                            reason=issue.message,
-                        )
+                    db.query(ProcessedChunk).filter_by(document_id=doc.id).delete()
 
-                # raw_text, needs_ocr, extraction_flags already set by Pipeline 1
-                doc.status = "processed"
-                doc.error_message = None
+                    total_chunks = len(result.valid_chunks)
+                    for chunk in result.valid_chunks:
+                        chunk_meta = dict(chunk.metadata)
+                        chunk_meta["parent_doc_id"] = str(doc.id)
+                        chunk_meta["total_chunks"] = total_chunks
+                        chunk_meta["heading_path"] = chunk.heading_path
+                        db.add(ProcessedChunk(
+                            document_id=doc.id,
+                            chunk_text=chunk.chunk_text,
+                            chunk_index=chunk.chunk_index,
+                            token_count=chunk.token_count,
+                            metadata_json=chunk_meta,
+                        ))
 
-                db.commit()
-                success_count += 1
-                logger.info(
-                    "Successfully processed document",
-                    doc_id=str(doc.id),
-                    chunks_created=len(result.valid_chunks),
-                    chunks_filtered=result.filtered_count,
-                )
+                    for issue in result.issues:
+                        if issue.severity == "error":
+                            logger.warning(
+                                "chunk.filtered",
+                                url=doc.url,
+                                chunk_index=issue.chunk_index,
+                                reason=issue.message,
+                            )
 
-            except Exception as e:
-                logger.error("Failed to process document", doc_id=str(doc.id), error=str(e))
-                doc.status = "failed"
-                doc.error_message = str(e) + "\n" + traceback.format_exc()
-                db.commit()
-                failure_count += 1
+                    # raw_text, needs_ocr, extraction_flags already set by Pipeline 1
+                    doc.status = "processed"
+                    doc.error_message = None
 
-        logger.info("Finished processing batch", success=success_count, failed=failure_count)
+                    db.commit()
+                    success_count += 1
+                    logger.info(
+                        "process.doc_done",
+                        doc_id=str(doc.id),
+                        chunks_created=len(result.valid_chunks),
+                        chunks_filtered=result.filtered_count,
+                    )
+
+                except Exception as e:
+                    logger.error("process.doc_failed", doc_id=str(doc.id), error=str(e))
+                    doc.status = "failed"
+                    doc.error_message = str(e) + "\n" + traceback.format_exc()
+                    db.commit()
+                    failure_count += 1
+            finally:
+                structlog.contextvars.clear_contextvars()
+
+        logger.info("process.batch_done", success=success_count, failed=failure_count)
 
     except Exception as e:
-        logger.error("Database or execution error during processor runner", error=str(e))
+        logger.error("process.batch_failed", error=str(e))
         db.rollback()
     finally:
         db.close()

@@ -39,10 +39,21 @@ class EmbeddingService:
         if not chunks:
             return []
 
+        import math
+        total_batches = math.ceil(len(chunks) / self._batch_size)
+        logger.info(
+            "embedding.started",
+            total_chunks=len(chunks),
+            model=EMBEDDING_MODEL,
+            batches=total_batches,
+        )
+
         results: list[EmbeddingResult] = []
         total_tokens = 0
+        batch_num = 0
 
         for batch in self._batches(chunks):
+            batch_num += 1
             texts = [c.chunk_text for c in batch]
             vectors, token_count = self._embed_batch(texts)
             total_tokens += token_count
@@ -59,15 +70,20 @@ class EmbeddingService:
                 )
 
             logger.info(
-                "embedding_service.batch_done",
-                batch_size=len(batch),
+                "embed.batch_done",
+                batch=batch_num,
+                of=total_batches,
+                chunks=len(batch),
                 tokens=token_count,
+                model=EMBEDDING_MODEL,
             )
 
         logger.info(
-            "embedding_service.complete",
+            "embed.complete",
             total_chunks=len(chunks),
             total_tokens=total_tokens,
+            avg_tokens_per_chunk=total_tokens // len(chunks) if chunks else 0,
+            model=EMBEDDING_MODEL,
         )
         return results
 

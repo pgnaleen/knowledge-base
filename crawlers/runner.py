@@ -1,6 +1,7 @@
 import uuid
 from datetime import UTC, datetime
 
+from scrapy import signals
 from scrapy.crawler import CrawlerProcess
 from scrapy.utils.project import get_project_settings
 
@@ -19,7 +20,7 @@ SPIDER_MAP = {
 }
 
 
-def run_crawlers(source_codes: list[str] | None = None, job_type: str = "full", scrapy_settings: dict | None = None):
+def run_crawlers(source_codes: list[str] | None = None, job_type: str = "full", scrapy_settings: dict | None = None) -> list[dict]:
     codes = source_codes or list(SPIDER_MAP.keys())
     settings = get_project_settings()
     if scrapy_settings:
@@ -27,13 +28,24 @@ def run_crawlers(source_codes: list[str] | None = None, job_type: str = "full", 
     process = CrawlerProcess(settings)
     db = SessionLocal()
     job_map: dict[str, uuid.UUID] = {}
+    summary: list[dict] = []
+
+    # Capture stats via spider_closed signal — process.crawlers is empty after start() returns
+    # in Scrapy 2.x because crawlers are removed from the set as they complete.
+    spider_results: dict[str, dict] = {}
+
+    def _on_spider_closed(spider, reason):
+        stats = spider.crawler.stats.get_stats() if spider.crawler.stats else {}
+        spider_results[spider.name] = {"stats": stats, "finish_reason": reason}
 
     try:
         for code in codes:
             source = db.query(Source).filter_by(code=code).first()
             if not source:
-                logger.error(f"Source {code} not found in database")
+                logger.error("crawl.source_not_found", source=code)
                 continue
+
+            logger.info("crawl.started", source=code)
 
             job = CrawlJob(
                 id=uuid.uuid4(),
@@ -44,21 +56,24 @@ def run_crawlers(source_codes: list[str] | None = None, job_type: str = "full", 
             )
             db.add(job)
             db.commit()
-            logger.info(f"Created crawl job {job.id} for source {code}")
+            logger.info("crawl.job_created", source=code, job_id=str(job.id))
             job_map[SPIDER_MAP[code]] = job.id
 
             process.crawl(SPIDER_MAP[code])
 
-        process.start()
-        logger.info("All crawlers completed")
-
-        # Update jobs with stats from completed crawlers
+        # Connect signal to every crawler before start() — crawlers are still in the set here
         for crawler in process.crawlers:
-            spider_name = crawler.spider.name if crawler.spider else None
-            if not spider_name or spider_name not in job_map:
+            crawler.signals.connect(_on_spider_closed, signal=signals.spider_closed)
+
+        process.start()
+        logger.info("crawl.all_completed")
+
+        # Update jobs using stats captured by the spider_closed signal handler
+        for spider_name, result in spider_results.items():
+            if spider_name not in job_map:
                 continue
-            stats = crawler.stats.get_stats() if crawler.stats else {}
-            finish_reason = stats.get("finish_reason", "")
+            stats = result["stats"]
+            finish_reason = result["finish_reason"]
             status = "completed" if finish_reason and finish_reason != "shutdown" else "failed"
 
             job = db.query(CrawlJob).filter_by(id=job_map[spider_name]).first()
@@ -68,20 +83,37 @@ def run_crawlers(source_codes: list[str] | None = None, job_type: str = "full", 
                 job.pages_found = stats.get("item_scraped_count", 0)
                 job.pages_new = stats.get("pages_new", 0)
                 job.pages_changed = stats.get("pages_changed", 0)
+                job.pages_deleted = stats.get("pages_deleted", 0)
                 job.pages_errored = stats.get("log_count/ERROR", 0)
                 db.commit()
+                summary.append({
+                    "source":        spider_name,
+                    "status":        status,
+                    "pages_found":   job.pages_found,
+                    "pages_new":     job.pages_new,
+                    "pages_changed": job.pages_changed,
+                    "pages_deleted": job.pages_deleted,
+                    "pages_errored": job.pages_errored,
+                })
                 logger.info(
-                    "Updated crawl job",
-                    job_id=job.id,
+                    "crawl.finished",
+                    source=spider_name,
+                    job_id=str(job.id),
                     status=job.status,
                     pages_found=job.pages_found,
                     pages_new=job.pages_new,
                     pages_changed=job.pages_changed,
+                    pages_deleted=stats.get("pages_deleted", 0),
+                    pages_unchanged=stats.get("pages_unchanged", 0),
+                    pages_skipped_dup=stats.get("pages_skipped_dup", 0),
+                    pages_needs_ocr=stats.get("pages_needs_ocr", 0),
+                    pages_pymupdf_fallback=stats.get("pages_pymupdf_fallback", 0),
+                    pages_dropped=stats.get("item_dropped_count", 0),
                     pages_errored=job.pages_errored,
                 )
     except Exception as e:
         # Mark any in-progress jobs as failed
-        logger.error(f"Crawler process failed: {e}")
+        logger.error("crawl.process_failed", error=str(e))
         for job_id in job_map.values():
             job = db.query(CrawlJob).filter_by(id=job_id).first()
             if job and job.status == "running":
@@ -92,6 +124,8 @@ def run_crawlers(source_codes: list[str] | None = None, job_type: str = "full", 
         raise
     finally:
         db.close()
+
+    return summary
 
 
 if __name__ == "__main__":

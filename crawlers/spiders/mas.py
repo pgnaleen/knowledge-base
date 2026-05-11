@@ -1,4 +1,5 @@
 from collections.abc import Generator
+from urllib.parse import urlparse
 
 from crawlers.base import BaseCrawler
 from crawlers.items import CrawlItem
@@ -23,6 +24,26 @@ class MASSpider(BaseCrawler):
         "residential property",
         "real estate",
     }
+    ALLOWED_PATH_PREFIXES = (
+        "/regulations-and-financial-stability",
+        "/regulation",
+        "/news",
+        "/-/media/",
+    )
+    BLOCKED_PATH_KEYWORDS = (
+        "/terms-of-use",
+        "/privacy",
+        "/about-mas",
+        "/careers",
+        "/contact",
+        "/statistics",
+        "/data-and-statistics",
+        "/publications/statistics",
+        "/investor-alert",
+        "/complaints",
+        "/accessibility",
+        "/sitemap",
+    )
 
     def get_start_urls(self) -> list[str]:
         return self.source_config.get("start_urls", [])
@@ -66,14 +87,17 @@ class MASSpider(BaseCrawler):
         if not super().should_follow_link(url, allowed_domains):
             return False
 
+        parsed = urlparse(url)
+        host = parsed.netloc.lower()
+        path = parsed.path.lower()
+
+        if host.startswith("eservices."):
+            return False
+
+        if any(skip in path for skip in self.BLOCKED_PATH_KEYWORDS):
+            return False
+
         if self._is_pdf_url(url):
             return True
 
-        url_lower = url.lower()
-        return not any(
-            skip in url_lower for skip in [
-                "/careers", "/media", "/about", "/corporate-actions",
-                "/statistics", "/data-and-statistics", "/publications/statistics",
-                "/investor-alert", "/complaints", "/contact",
-            ]
-        )
+        return any(path.startswith(prefix) for prefix in self.ALLOWED_PATH_PREFIXES)

@@ -32,6 +32,10 @@ class PgVectorStore:
         if not results:
             return {}
 
+        import math
+        source_name = results[0].chunk.source_name if results else "unknown"
+        total_batches = math.ceil(len(results) / _UPSERT_BATCH)
+
         id_map: dict = {}
         for i in range(0, len(results), _UPSERT_BATCH):
             batch_results = results[i : i + _UPSERT_BATCH]
@@ -39,7 +43,7 @@ class PgVectorStore:
             batch_map = self._upsert_batch(batch_results, batch_ids)
             id_map.update(batch_map)
 
-        logger.info("pgvector_store.upserted", count=len(id_map))
+        logger.info("pgvector.stored", source=source_name, count=len(id_map), batches=total_batches)
         return id_map
 
     @retry(

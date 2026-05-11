@@ -40,8 +40,8 @@ class MetadataExtractor:
         tags = self._extract_tags(doc.text, heading_texts, tag_config or {})
         section = self._extract_section(doc.headings, doc.title)
 
-        logger.debug(
-            "metadata_extractor.extracted",
+        logger.info(
+            "metadata.extracted",
             source_agency=source_agency,
             section=section,
             effective_date=effective_date,

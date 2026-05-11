@@ -44,7 +44,7 @@ class ChunkValidator:
     """
 
     MIN_TOKENS: int = 50
-    MAX_TOKENS: int = 512
+    MAX_TOKENS: int = 600
     VALID_CHUNK_TYPES: frozenset[str] = frozenset({"text", "table"})
     REQUIRED_METADATA_KEYS: frozenset[str] = frozenset(
         {"source_agency", "chunk_type", "chunk_index"}
@@ -64,6 +64,14 @@ class ChunkValidator:
                 seen_hashes.add(text_hash)
                 valid.append(chunk)
             else:
+                error_issues = [i for i in chunk_issues if i.severity == "error"]
+                for issue in error_issues:
+                    logger.warning(
+                        "chunk.rejected",
+                        chunk_index=chunk.chunk_index,
+                        reason=issue.message,
+                        text_preview=chunk.chunk_text[:80].replace("\n", " "),
+                    )
                 filtered += 1
 
         issues.extend(self._check_sequential_indices(valid))
@@ -72,7 +80,7 @@ class ChunkValidator:
             chunk.chunk_index = new_idx
             chunk.metadata["chunk_index"] = new_idx
 
-        logger.debug(
+        logger.info(
             "validator.result",
             total_input=len(chunks),
             valid=len(valid),

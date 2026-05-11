@@ -1,10 +1,21 @@
 from collections.abc import Generator
 
+from scrapy_playwright.page import PageMethod
+
 from crawlers.base import BaseCrawler
 from crawlers.items import CrawlItem
 from config.logger import get_logger
 
 logger = get_logger(__name__)
+
+_CPF_PLAYWRIGHT_META = {
+    "playwright": True,
+    "playwright_page_methods": [
+        # CPF is a React SPA — domcontentloaded fires before content renders.
+        # networkidle waits for JS to finish injecting the page content.
+        PageMethod("wait_for_load_state", "networkidle"),
+    ],
+}
 
 
 class CPFSpider(BaseCrawler):
@@ -32,6 +43,25 @@ class CPFSpider(BaseCrawler):
 
     def get_start_urls(self) -> list[str]:
         return self.source_config.get("start_urls", [])
+
+    def start_requests(self):
+        import scrapy
+        for url in self.get_start_urls():
+            if self._is_pdf_url(url):
+                yield scrapy.Request(url, callback=self.handle_response)
+            else:
+                yield scrapy.Request(url, callback=self.handle_response, meta=_CPF_PLAYWRIGHT_META)
+
+    def _follow_links(self, response):
+        import scrapy
+        allowed = self.source_config.get("allowed_domains", [])
+        for href in response.css("a::attr(href)").getall():
+            url = response.urljoin(href)
+            if self.should_follow_link(url, allowed):
+                if self._is_pdf_url(url):
+                    yield response.follow(url, callback=self.handle_response)
+                else:
+                    yield response.follow(url, callback=self.handle_response, meta=_CPF_PLAYWRIGHT_META)
 
     def parse_document(self, response) -> Generator[CrawlItem, None, None]:
         content_type_header = response.headers.get("Content-Type", b"").decode("utf-8", errors="ignore").lower()

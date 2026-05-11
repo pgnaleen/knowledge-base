@@ -83,6 +83,13 @@ def upload_embeddings(batch_id: str, content: str) -> str:
     return key
 
 
+def delete_s3_object(key: str) -> None:
+    """Delete an object from the bucket by key. No-op if key is None or empty."""
+    if not key:
+        return
+    get_s3_client().delete_object(Bucket=settings.s3_bucket, Key=key)
+
+
 def download_from_s3(key: str) -> bytes:
     """Download any object from the single bucket by key. Returns raw bytes."""
     response = get_s3_client().get_object(Bucket=settings.s3_bucket, Key=key)

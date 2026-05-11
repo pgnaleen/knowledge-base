@@ -34,8 +34,10 @@ ITEM_PIPELINES = {
     "crawlers.pipelines.PostgresPipeline": 200,
 }
 
-LOG_LEVEL = settings.log_level
+LOG_LEVEL = "WARNING"
 LOGSTATS_INTERVAL = 15  # Log crawl progress every 15s instead of 60s
 FEED_EXPORT_ENCODING = "utf-8"
 REQUEST_FINGERPRINTER_IMPLEMENTATION = "2.7"
 TELNETCONSOLE_ENABLED = False
+
+LOG_VERSIONS = []

@@ -41,6 +41,14 @@ class DocumentChunker:
         doc: ExtractedDocument,
         metadata: ExtractedMetadata,
     ) -> list[DocumentChunk]:
+        logger.info(
+            "chunker.started",
+            source_url=doc.source_url,
+            source_name=doc.source_name,
+            content_type=doc.content_type,
+            word_count=doc.word_count,
+        )
+
         chunks: list[DocumentChunk] = []
         base_meta = metadata.to_dict()
         counter = 0
@@ -94,8 +102,8 @@ class DocumentChunker:
             )
             counter += 1
 
-        logger.debug(
-            "chunker.chunked",
+        logger.info(
+            "chunker.done",
             source_url=doc.source_url,
             source_name=doc.source_name,
             text_chunks=sum(1 for c in chunks if c.chunk_type == "text"),

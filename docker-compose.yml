@@ -11,6 +11,7 @@ services:
     working_dir: /app
     environment:
       PYTHONPATH: /app
+      TZ: Asia/Colombo
       DATABASE_URL: postgresql://kb_user:kb_pass@postgres:5432/kb_pipeline_db
       REDIS_URL: redis://redis:6379/0
       S3_ENDPOINT: http://minio:9000

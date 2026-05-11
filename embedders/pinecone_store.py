@@ -41,12 +41,12 @@ class PineconeStore:
                 spec=ServerlessSpec(cloud="aws", region=settings.pinecone_environment),
             )
             logger.info(
-                "pinecone_store.index_created",
+                "pinecone.index_created",
                 index=self._index_name,
                 dimension=dimension,
             )
         else:
-            logger.info("pinecone_store.index_exists", index=self._index_name)
+            logger.info("pinecone.index_exists", index=self._index_name)
 
     def upsert(
         self,
@@ -85,10 +85,11 @@ class PineconeStore:
                 total_upserted += len(batch)
 
         logger.info(
-            "pinecone_store.upserted",
+            "pinecone.stored",
+            index=self._index_name,
             chunks=len(results),
             namespaces=list(by_namespace.keys()),
-            total_upserted=total_upserted,  # len(results) * 2 — source namespace + "all"
+            total_upserted=total_upserted,
         )
         return id_map
 
@@ -111,7 +112,8 @@ class PineconeStore:
         meta["section"] = m.get("section", "")
         meta["source_agency"] = m.get("source_agency", "")
         meta["effective_date"] = m.get("effective_date", "")
-        meta["topic_tags"] = m.get("topic_tags", [])
-        meta["property_types"] = m.get("property_types", [])
-        meta["citizenship_types"] = m.get("citizenship_types", [])
+        tags = m.get("tags", {})
+        meta["topic_tags"] = tags.get("topic", [])
+        meta["property_types"] = tags.get("property_type", [])
+        meta["citizenship_types"] = tags.get("citizenship", [])
         return meta

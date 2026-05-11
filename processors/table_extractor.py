@@ -25,12 +25,19 @@ class TableExtractor:
             return []
 
         results: list[ExtractedTable] = []
-        for table_tag in node.find_all("table"):
+        for table_index, table_tag in enumerate(node.find_all("table")):
             extracted = self._parse_html_table(table_tag)
             if extracted is not None:
                 results.append(extracted)
+                logger.debug(
+                    "table.found_html_detail",
+                    index=table_index,
+                    caption=extracted.caption or "untitled",
+                    rows=len(extracted.rows),
+                    cols=len(extracted.headers),
+                )
 
-        logger.debug("table_extractor.html_tables_found", count=len(results))
+        logger.info("table.found_html", count=len(results))
         return results
 
     def extract_from_pdf(self, pdf_bytes: bytes) -> list[ExtractedTable]:
@@ -41,6 +48,7 @@ class TableExtractor:
         import pdfplumber
 
         results: list[ExtractedTable] = []
+        table_index = 0
         try:
             with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
                 for page_index, page in enumerate(pdf.pages):
@@ -50,10 +58,18 @@ class TableExtractor:
                         extracted = self._parse_pdf_table(raw, page_number)
                         if extracted is not None:
                             results.append(extracted)
+                            logger.debug(
+                                "table.found_pdf_detail",
+                                index=table_index,
+                                page=page_number,
+                                rows=len(extracted.rows),
+                                cols=len(extracted.headers),
+                            )
+                            table_index += 1
         except Exception as exc:
             logger.warning("table_extractor.pdf_failed", error=str(exc))
 
-        logger.debug("table_extractor.pdf_tables_found", count=len(results))
+        logger.info("table.found_pdf", count=len(results))
         return results
 
     @staticmethod

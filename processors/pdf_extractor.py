@@ -34,6 +34,8 @@ class PDFExtractor:
         if not pdf_bytes:
             raise PDFExtractionError("pdf_bytes is empty")
 
+        logger.info("pdf.started", source_url=source_url, source_name=source_name)
+
         warnings: list[str] = []
         text = ""
         title = "Untitled"
@@ -56,6 +58,12 @@ class PDFExtractor:
                 f"pdfplumber failed ({type(exc).__name__}), using PyMuPDF fallback"
             )
             used_fallback = True
+            logger.warning(
+                "pdf.pymupdf_fallback",
+                source_url=source_url,
+                source_name=source_name,
+                reason=type(exc).__name__,
+            )
 
         if used_fallback or not text.strip():
             if not used_fallback:
@@ -88,14 +96,15 @@ class PDFExtractor:
                 "— flagged for OCR queue"
             )
             logger.warning(
-                "pdf_extractor.scanned_pdf",
+                "pdf.ocr_detected",
                 word_count=word_count,
+                pages=page_count,
                 source_url=source_url,
                 source_name=source_name,
             )
 
-        logger.debug(
-            "pdf_extractor.extracted",
+        logger.info(
+            "pdf.extracted",
             source_url=source_url,
             source_name=source_name,
             page_count=page_count,
