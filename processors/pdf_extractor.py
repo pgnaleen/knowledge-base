@@ -14,6 +14,8 @@ logger = get_logger("pdf_extractor")
 _SCANNED_WORD_THRESHOLD = 20
 _SCANNED_PAGE_RATIO_THRESHOLD = 0.8
 _LARGE_IMAGE_COVERAGE_THRESHOLD = 0.85
+_LOW_TEXT_PAGE_RATIO_THRESHOLD = 0.2
+_IMAGE_PAGE_RATIO_THRESHOLD = 0.6
 
 
 class PDFExtractionError(ValueError):
@@ -44,6 +46,8 @@ class PDFExtractor:
         page_count = 0
         used_fallback = False
         tables: list[ExtractedTable] = []
+        pdfplumber_error = ""
+        pymupdf_error = ""
 
         try:
             text, title, page_count = self._extract_pdfplumber(pdf_bytes)
@@ -51,6 +55,8 @@ class PDFExtractor:
         except PDFExtractionError:
             raise
         except Exception as exc:
+            print(f"[PDF_EXTRACTOR] pdfplumber failed; falling back to PyMuPDF for {source_url}")
+            pdfplumber_error = f"{type(exc).__name__}: {exc}"
             logger.warning(
                 "pdf_extractor.pdfplumber_failed",
                 error=str(exc),
@@ -69,6 +75,7 @@ class PDFExtractor:
 
         if used_fallback or not text.strip():
             if not used_fallback:
+                print(f"[PDF_EXTRACTOR] pdfplumber returned no text; falling back to PyMuPDF for {source_url}")
                 warnings.append("pdfplumber returned no text, using PyMuPDF fallback")
                 used_fallback = True
             try:
@@ -82,6 +89,7 @@ class PDFExtractor:
             except PDFExtractionError:
                 raise
             except Exception as exc:
+                pymupdf_error = f"{type(exc).__name__}: {exc}"
                 logger.error(
                     "pdf_extractor.pymupdf_failed",
                     error=str(exc),
@@ -92,7 +100,24 @@ class PDFExtractor:
         normalised = self._normalise_whitespace(text)
         word_count = len(normalised.split()) if normalised.strip() else 0
 
+        # Check for extraction failures
+        if not normalised and (pdfplumber_error or pymupdf_error):
+            extraction_error = (
+                "ERROR: PDF text extraction failed. "
+                f"pdfplumber_error={pdfplumber_error or 'none'}; "
+                f"pymupdf_error={pymupdf_error or 'none'}"
+            )
+            warnings.append(extraction_error)
+            logger.error(
+                "pdf.text_extraction_failed",
+                source_url=source_url,
+                source_name=source_name,
+                pdfplumber_error=pdfplumber_error or None,
+                pymupdf_error=pymupdf_error or None,
+            )
+
         is_scanned, scan_signals = self._detect_scanned_pdf(pdf_bytes)
+
         if is_scanned:
             warnings.append(
                 "Scanned PDF detected (image-only pages dominate, "
@@ -109,11 +134,20 @@ class PDFExtractor:
                 scanned_like_pages=scan_signals["scanned_like_pages"],
                 source_url=source_url,
                 source_name=source_name,
+                scan_details=scan_signals,
             )
         elif word_count < _SCANNED_WORD_THRESHOLD:
-            warnings.append(
-                f"Low extracted text ({word_count} words) but text layer is present; "
-                "not auto-flagged as scanned PDF"
+            low_text_error = (
+                f"ERROR: Very low extracted text ({word_count} words) but OCR heuristic did not classify as scanned PDF."
+            )
+            warnings.append(low_text_error)
+            logger.error(
+                "pdf.low_text_not_ocr",
+                word_count=word_count,
+                pages=page_count,
+                source_url=source_url,
+                source_name=source_name,
+                scan_details=scan_signals,
             )
 
         logger.info(
@@ -124,6 +158,7 @@ class PDFExtractor:
             word_count=word_count,
             table_count=len(tables),
             used_fallback=used_fallback,
+            is_scanned=is_scanned,
         )
 
         return ExtractedDocument(
@@ -148,10 +183,12 @@ class PDFExtractor:
                 page_count = len(pdf.pages)
 
                 pages: list[str] = []
-                for page in pdf.pages:
-                    page_text = page.extract_text() or ""
+                for i, page in enumerate(pdf.pages):
+                    page_number = i + 1
+                    # x_tolerance=3 helps handle multi-column layouts better
+                    page_text = page.extract_text(x_tolerance=3) or ""
                     if page_text.strip():
-                        pages.append(page_text.strip())
+                        pages.append(f"[PAGE_START {page_number}]\n{page_text.strip()}\n[PAGE_END {page_number}]")
 
                 return "\n\n".join(pages), title, page_count
         except Exception as exc:
@@ -173,10 +210,12 @@ class PDFExtractor:
             page_count = doc.page_count
 
             pages: list[str] = []
-            for page in doc:
-                page_text = page.get_text("text")
+            for i, page in enumerate(doc):
+                page_number = i + 1
+                # sort=True preserves reading order for multi-column layouts
+                page_text = page.get_text("text", sort=True)
                 if page_text.strip():
-                    pages.append(page_text.strip())
+                    pages.append(f"[PAGE_START {page_number}]\n{page_text.strip()}\n[PAGE_END {page_number}]")
 
             return "\n\n".join(pages), title, page_count
         finally:

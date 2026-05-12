@@ -40,7 +40,8 @@ def _merge_tables_into_text(text: str, tables: list) -> str:
     for table in tables:
         md = table_extractor.to_markdown(table)
         if md:
-            markdown_tables.append(md)
+            # Wrap table in structural markers
+            markdown_tables.append(f"[TABLE_START]\n{md}\n[TABLE_END]")
 
     if not markdown_tables:
         return text
@@ -115,10 +116,13 @@ class S3Pipeline:
                     item["content_hash"] = hashlib.sha256(_normalize_text(extracted.text).encode("utf-8")).hexdigest()
                     logger.info("hash.created", url=item.get("url"), source=item["source_code"], hash=item["content_hash"][:12])
                     is_empty = not extracted.text.strip()
+                    extraction_errors = [w for w in extracted.extraction_warnings if w.startswith("ERROR:")]
+                    extraction_warnings = [w for w in extracted.extraction_warnings if not w.startswith("ERROR:")]
                     is_scanned = any("Scanned PDF" in w for w in extracted.extraction_warnings)
                     item["needs_ocr"] = is_scanned
                     item["extraction_flags"] = {
-                        "warnings": extracted.extraction_warnings,
+                        "warnings": extraction_warnings,
+                        "errors": extraction_errors,
                         "word_count": extracted.word_count,
                         "is_empty": is_empty,
                         "needs_ocr": is_scanned,
@@ -142,7 +146,15 @@ class S3Pipeline:
                     item["raw_text"] = ""
                     item["content_hash"] = hashlib.sha256(b"").hexdigest()
                     item["needs_ocr"] = False
-                    item["extraction_flags"] = {"warnings": [str(e)], "word_count": 0, "is_empty": True, "needs_ocr": False, "content_type": "pdf", "table_count": 0}
+                    item["extraction_flags"] = {
+                        "warnings": [],
+                        "errors": [f"ERROR: pdf.extract_failed: {str(e)}"],
+                        "word_count": 0,
+                        "is_empty": True,
+                        "needs_ocr": False,
+                        "content_type": "pdf",
+                        "table_count": 0,
+                    }
 
             return item
         except Exception as e:
