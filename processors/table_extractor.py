@@ -104,7 +104,7 @@ class TableExtractor:
         lines.append("| " + " | ".join("---" for _ in headers) + " |")
         for row in table.rows:
             padded = list(row) + [""] * (col_count - len(row))
-            lines.append("| " + " | ".join(escape(str(c)) for c in padded) + " |")
+            lines.append("| " + " | ".join(escape(c) for c in padded) + " |")
 
         return "\n".join(lines)
 
@@ -142,7 +142,7 @@ class TableExtractor:
                 return None
             first_tr = all_rows[0]
             first_cells = first_tr.find_all(["th", "td"])
-            if first_cells and all(c.name == "th" for c in first_cells):
+            if first_cells is not None and len(first_cells) > 0 and all(getattr(c, "name", None) == "th" for c in first_cells):
                 headers = [c.get_text(separator=" ", strip=True) for c in first_cells]
                 data_rows = all_rows[1:]
             else:
@@ -179,7 +179,7 @@ class TableExtractor:
         def clean(cell: str | None) -> str:
             if cell is None:
                 return ""
-            return str(cell).replace("\n", " ").strip()
+            return cell.replace("\n", " ").strip()
 
         cleaned = [[clean(c) for c in row] for row in raw]
         if all(not cell for row in cleaned for cell in row):
@@ -201,10 +201,13 @@ class TableExtractor:
 
     @staticmethod
     def _table_source_tag(table_tag: Tag) -> str:
-        tag_id = table_tag.get("id", "")
+        tag_id = table_tag.get("id")
         if tag_id:
             return f"table#{tag_id}"
-        classes = table_tag.get("class") or []
+        
+        classes = table_tag.get("class")
         if classes:
-            return f"table.{classes[0]}"
+            class_name = classes[0] if isinstance(classes, list) else classes
+            return f"table.{class_name}"
+            
         return "table"
