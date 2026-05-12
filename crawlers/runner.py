@@ -1,5 +1,5 @@
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime
 
 from scrapy import signals
 from scrapy.crawler import CrawlerProcess
@@ -52,7 +52,7 @@ def run_crawlers(source_codes: list[str] | None = None, job_type: str = "full", 
                 source_id=source.id,
                 job_type=job_type,
                 status="running",
-                started_at=datetime.now(UTC),
+                started_at=datetime.now(),
             )
             db.add(job)
             db.commit()
@@ -79,7 +79,7 @@ def run_crawlers(source_codes: list[str] | None = None, job_type: str = "full", 
             job = db.query(CrawlJob).filter_by(id=job_map[spider_name]).first()
             if job:
                 job.status = status
-                job.completed_at = datetime.now(UTC)
+                job.completed_at = datetime.now()
                 job.pages_found = stats.get("item_scraped_count", 0)
                 job.pages_new = stats.get("pages_new", 0)
                 job.pages_changed = stats.get("pages_changed", 0)
@@ -119,7 +119,7 @@ def run_crawlers(source_codes: list[str] | None = None, job_type: str = "full", 
             if job and job.status == "running":
                 job.status = "failed"
                 job.error_message = str(e)
-                job.completed_at = datetime.now(UTC)
+                job.completed_at = datetime.now()
                 db.commit()
         raise
     finally:

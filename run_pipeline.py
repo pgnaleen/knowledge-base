@@ -77,6 +77,42 @@ def _print_crawl_summary(summary: list[dict]) -> None:
     print(f"{'═' * len(divider)}\n", flush=True)
 
 
+def _print_process_summary(summary: list[dict]) -> None:
+    """Print a formatted per-source process summary table."""
+    if not summary:
+        print("\n(no documents processed)\n", flush=True)
+        return
+
+    cols    = ["source", "docs", "chunks", "dropped", "avg_chunks", "failed"]
+    headers = ["Source", "Docs", "Chunks", "Dropped", "Avg/Doc", "Failed"]
+
+    widths = [
+        max(len(h), max(len(str(row[c])) for row in summary))
+        for h, c in zip(headers, cols)
+    ]
+
+    def _row(values: list) -> str:
+        return "  ".join(str(v).ljust(w) for v, w in zip(values, widths))
+
+    divider = "─" * (sum(widths) + 2 * (len(widths) - 1))
+    title = "PROCESS SUMMARY"
+    print(f"\n{'═' * len(divider)}", flush=True)
+    print(f"{title:^{len(divider)}}", flush=True)
+    print(divider, flush=True)
+    print(_row(headers), flush=True)
+    print(divider, flush=True)
+    for row in summary:
+        print(_row([row[c] for c in cols]), flush=True)
+    print(divider, flush=True)
+    totals_docs    = sum(r["docs"]    for r in summary)
+    totals_chunks  = sum(r["chunks"]  for r in summary)
+    totals_dropped = sum(r["dropped"] for r in summary)
+    totals_failed  = sum(r["failed"]  for r in summary)
+    avg_total      = round(totals_chunks / totals_docs, 1) if totals_docs else 0
+    print(_row(["TOTAL", totals_docs, totals_chunks, totals_dropped, avg_total, totals_failed]), flush=True)
+    print(f"{'═' * len(divider)}\n", flush=True)
+
+
 def _parse_scrapy_settings(args: list[str]) -> tuple[dict, list[str]]:
     """Extract -S KEY=VALUE pairs from args; return (settings_dict, remaining_args)."""
     scrapy_settings: dict = {}
@@ -111,11 +147,12 @@ def main():
     process_only = "--process-only" in args
     embed_only = "--embed-only" in args
     skip_embed = "--skip-embed" in args
+    purge_vectors = "--purge-vectors" in args
     source_codes = [a for a in args if not a.startswith("--")] or None
 
-    do_crawl = not process_only and not embed_only
-    do_process = not crawl_only and not embed_only
-    do_embed = not crawl_only and not skip_embed
+    do_crawl = not process_only and not embed_only and not purge_vectors
+    do_process = not crawl_only and not embed_only and not purge_vectors
+    do_embed = not crawl_only and not skip_embed and not purge_vectors
 
     logger.info(
         "pipeline.started",
@@ -123,7 +160,21 @@ def main():
         crawl=do_crawl,
         process=do_process,
         embed=do_embed,
+        purge=purge_vectors,
     )
+
+    # ── Purge vectors (standalone destructive operation) ──────────────────────
+    if purge_vectors:
+        from embedders.pipeline import EmbeddingPipeline
+        _banner("PURGE PINECONE VECTORS")
+        pipeline = EmbeddingPipeline(
+            openai_api_key=settings.openai_api_key or None,
+            pinecone_api_key=settings.pinecone_api_key or None,
+            pinecone_index=settings.pinecone_index or None,
+        )
+        pipeline.purge_vectors(source_codes=source_codes)
+        logger.info("pipeline.done")
+        return
 
     # ── Stage 1: Crawl ────────────────────────────────────────────────────────
     if do_crawl:
@@ -135,14 +186,27 @@ def main():
         logger.info("stage.crawl_done")
         _print_crawl_summary(crawl_summary)
 
+    # ── Post-crawl cleanup: delete vectors for removed pages ──────────────────
+    if do_crawl:
+        from embedders.pipeline import EmbeddingPipeline
+        _cleanup = EmbeddingPipeline(
+            openai_api_key=settings.openai_api_key or None,
+            pinecone_api_key=settings.pinecone_api_key or None,
+            pinecone_index=settings.pinecone_index or None,
+        )
+        cleaned = _cleanup.cleanup_deleted_documents(source_codes=source_codes)
+        if cleaned:
+            logger.info("stage.cleanup_done", docs_cleaned=cleaned)
+
     # ── Stage 2: Extract → Chunk → Validate → Save ────────────────────────────
     if do_process:
         from processors.runner import process_pending_documents
 
         _banner("STAGE 2: PROCESS")
         logger.info("stage.process_started")
-        process_pending_documents()
+        process_summary = process_pending_documents(source_codes=source_codes)
         logger.info("stage.process_done")
+        _print_process_summary(process_summary)
 
     # ── Stage 3: Embed → Pinecone / pgvector ──────────────────────────────────
     if do_embed:

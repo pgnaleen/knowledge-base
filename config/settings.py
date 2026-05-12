@@ -17,7 +17,11 @@ class Settings(BaseSettings):
     s3_region: str = "us-east-1"
     s3_bucket: str = "sg-property-kb"
 
-    # OpenAI
+    # OpenRouter (primary embedding provider)
+    openrouter_api_key: str = ""
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+
+    # OpenAI (fallback embedding provider)
     openai_api_key: str = ""
 
     # Pinecone

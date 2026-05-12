@@ -93,6 +93,33 @@ class PineconeStore:
         )
         return id_map
 
+    def delete_all_in_namespace(self, namespace: str) -> None:
+        """Delete every vector in a namespace. Used for full purge when DB is wiped."""
+        self._index.delete(delete_all=True, namespace=namespace)
+        logger.info("pinecone.namespace_purged", namespace=namespace)
+
+    def delete_vectors(self, vector_ids: list[str], source_name: str) -> None:
+        """Delete vectors from both source and 'all' namespaces by vector ID."""
+        if not vector_ids:
+            return
+        namespaces = [source_name.lower(), "all"]
+        total_deleted = 0
+        for namespace in namespaces:
+            for i in range(0, len(vector_ids), _PINECONE_UPSERT_BATCH):
+                batch = vector_ids[i : i + _PINECONE_UPSERT_BATCH]
+                self._delete_batch(batch, namespace)
+                total_deleted += len(batch)
+        logger.info(
+            "pinecone.deleted",
+            source=source_name,
+            count=len(vector_ids),
+            namespaces=namespaces,
+        )
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30), reraise=True)
+    def _delete_batch(self, vector_ids: list[str], namespace: str) -> None:
+        self._index.delete(ids=vector_ids, namespace=namespace)
+
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30), reraise=True)
     def _upsert_batch(self, batch: list[dict], namespace: str) -> None:
         self._index.upsert(vectors=batch, namespace=namespace)

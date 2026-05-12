@@ -7,7 +7,7 @@ Bucket: sg-property-kb
   processed/{source}/{date}/{url_hash}.txt
 """
 
-from datetime import UTC, datetime
+from datetime import datetime
 
 import boto3
 from botocore.config import Config
@@ -34,7 +34,7 @@ def get_s3_client():
 
 def upload_raw_html(source_code: str, url_hash: str, content: str) -> str:
     """Upload raw HTML. Returns the S3 key (prefix included)."""
-    date_str = datetime.now(UTC).strftime("%Y-%m-%d")
+    date_str = datetime.now().strftime("%Y-%m-%d")
     key = f"raw-html/{source_code}/{date_str}/{url_hash}.html"
     get_s3_client().put_object(
         Bucket=settings.s3_bucket,
@@ -47,7 +47,7 @@ def upload_raw_html(source_code: str, url_hash: str, content: str) -> str:
 
 def upload_raw_pdf(source_code: str, url_hash: str, content: bytes) -> str:
     """Upload raw PDF. Returns the S3 key (prefix included)."""
-    date_str = datetime.now(UTC).strftime("%Y-%m-%d")
+    date_str = datetime.now().strftime("%Y-%m-%d")
     key = f"raw-pdf/{source_code}/{date_str}/{url_hash}.pdf"
     get_s3_client().put_object(
         Bucket=settings.s3_bucket,
@@ -60,7 +60,7 @@ def upload_raw_pdf(source_code: str, url_hash: str, content: bytes) -> str:
 
 def upload_processed_text(source_code: str, url_hash: str, content: str) -> str:
     """Upload processed/extracted text. Returns the S3 key (prefix included)."""
-    date_str = datetime.now(UTC).strftime("%Y-%m-%d")
+    date_str = datetime.now().strftime("%Y-%m-%d")
     key = f"processed/{source_code}/{date_str}/{url_hash}.txt"
     get_s3_client().put_object(
         Bucket=settings.s3_bucket,

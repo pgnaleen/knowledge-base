@@ -43,6 +43,8 @@ services:
       POSTGRES_USER: kb_user
       POSTGRES_PASSWORD: kb_pass
       POSTGRES_DB: kb_pipeline_db
+      TZ: Asia/Colombo
+      PGTZ: Asia/Colombo
     ports:
       - "5432:5432"
     volumes:

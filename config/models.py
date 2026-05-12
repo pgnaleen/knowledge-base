@@ -61,7 +61,7 @@ class RawDocument(Base):
     extraction_flags = Column(JSON, default=dict)
 
     source = relationship("Source", back_populates="documents")
-    chunks = relationship("ProcessedChunk", back_populates="document")
+    chunks = relationship("ProcessedChunk", back_populates="document", cascade="all, delete-orphan")
 
     __table_args__ = (
         UniqueConstraint("source_id", "url", name="uq_raw_documents_source_url"),

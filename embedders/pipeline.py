@@ -7,9 +7,11 @@ import openai
 
 import tiktoken
 from sqlalchemy import text
+from sqlalchemy.orm import Session
 
-from config.database import engine
+from config.database import SessionLocal, engine
 from config.logger import get_logger
+from config.models import ProcessedChunk, RawDocument
 from config.storage import upload_embeddings
 from embedders.embedding_service import EmbeddingService
 from embedders.pgvector_store import PgVectorStore
@@ -153,8 +155,135 @@ class EmbeddingPipeline:
                     {"eid": vector_id, "id": chunk_id},
                 )
 
-        logger.info("pipeline.embed_chunks_done", source=source_code or "all", embedded=len(results), store=store_used)
+        total_tokens = sum(r.token_count for r in results)
+        logger.info(
+            "pipeline.embed_chunks_done",
+            source=source_code or "all",
+            embedded=len(results),
+            total_tokens=total_tokens,
+            avg_tokens_per_chunk=total_tokens // len(results) if results else 0,
+            store=store_used,
+        )
         return len(results)
+
+
+    def cleanup_deleted_documents(self, source_codes: list[str] | None = None) -> int:
+        """Delete chunks and vectors for all raw_documents with status='deleted'.
+
+        Flow per deleted doc:
+          1. Collect embedding_ids from processed_chunks
+          2. Delete vectors from Pinecone (source + 'all' namespaces)
+          3. Delete processed_chunks rows from DB (pgvector implicit)
+          4. raw_documents row kept as status='deleted' for audit trail
+
+        Returns count of documents cleaned up.
+        """
+        db: Session = SessionLocal()
+        try:
+            query = db.query(RawDocument).filter(RawDocument.status == "deleted")
+            if source_codes:
+                from config.models import Source
+                query = query.join(Source).filter(
+                    Source.code.in_([c.lower() for c in source_codes])
+                )
+            deleted_docs = query.all()
+
+            if not deleted_docs:
+                logger.debug("cleanup.nothing_to_clean", source=source_codes or "all")
+                return 0
+
+            logger.info("cleanup.started", docs=len(deleted_docs), source=source_codes or "all")
+            cleaned = 0
+
+            for doc in deleted_docs:
+                source_name = doc.source.code if doc.source else "unknown"
+                chunks = db.query(ProcessedChunk).filter_by(document_id=doc.id).all()
+
+                if not chunks:
+                    logger.debug("cleanup.doc_no_chunks", url=doc.url, source=source_name)
+                    continue
+
+                embedding_ids = [c.embedding_id for c in chunks if c.embedding_id]
+                logger.debug(
+                    "cleanup.doc_found",
+                    url=doc.url,
+                    source=source_name,
+                    chunks=len(chunks),
+                    vectors=len(embedding_ids),
+                )
+
+                # Delete from Pinecone
+                if embedding_ids and self._pinecone_store is not None:
+                    try:
+                        self._pinecone_store.delete_vectors(embedding_ids, source_name)
+                        logger.debug(
+                            "cleanup.vectors_deleted",
+                            url=doc.url,
+                            source=source_name,
+                            count=len(embedding_ids),
+                            store="pinecone",
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "cleanup.pinecone_delete_failed",
+                            url=doc.url,
+                            source=source_name,
+                            error=str(exc),
+                        )
+
+                # Delete processed_chunks (pgvector embedding column goes with the row)
+                db.query(ProcessedChunk).filter_by(document_id=doc.id).delete()
+                db.commit()
+
+                logger.info(
+                    "cleanup.doc_cleaned",
+                    url=doc.url,
+                    source=source_name,
+                    chunks_removed=len(chunks),
+                    vectors_removed=len(embedding_ids),
+                )
+                cleaned += 1
+
+            logger.info(
+                "cleanup.done",
+                docs_cleaned=cleaned,
+                source=source_codes or "all",
+            )
+            return cleaned
+
+        except Exception as exc:
+            logger.error("cleanup.failed", error=str(exc))
+            db.rollback()
+            return 0
+        finally:
+            db.close()
+
+
+    def purge_vectors(self, source_codes: list[str] | None = None) -> None:
+        """Delete ALL vectors from Pinecone for given sources (or every namespace if none given).
+
+        Use this when DB/MinIO data has been manually wiped and Pinecone has orphan vectors.
+        Namespaces purged per source: '{source}' + 'all'.
+        If source_codes is None, purges all 5 source namespaces + 'all'.
+        """
+        if self._pinecone_store is None:
+            logger.warning("purge.pinecone_unavailable", reason="Pinecone not configured — nothing to purge")
+            return
+
+        _ALL_SOURCES = ["hdb", "ura", "iras", "mas", "cpf"]
+        sources = [c.lower() for c in source_codes] if source_codes else _ALL_SOURCES
+
+        namespaces = list(sources) + (["all"] if not source_codes or set(sources) == set(_ALL_SOURCES) else [])
+
+        logger.info("purge.started", namespaces=namespaces)
+        for ns in namespaces:
+            try:
+                self._pinecone_store.delete_all_in_namespace(ns)
+                logger.info("purge.namespace_done", namespace=ns)
+            except Exception as exc:
+                logger.warning("purge.namespace_failed", namespace=ns, error=str(exc))
+
+        logger.info("purge.done", namespaces_cleared=namespaces)
 
 
 def _source_filter(source_code: str | None) -> tuple[str, dict]:
