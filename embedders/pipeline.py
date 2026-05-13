@@ -29,6 +29,7 @@ _UNEMBEDDED_CHUNKS_SQL = """
     JOIN raw_documents rd ON pc.document_id = rd.id
     JOIN sources s ON rd.source_id = s.id
     WHERE pc.embedding_id IS NULL
+      AND rd.status != 'deleted'
     {source_filter}
     ORDER BY pc.id
 """
