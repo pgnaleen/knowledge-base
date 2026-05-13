@@ -104,47 +104,68 @@ class RetrievalService:
         return {"$and": conditions}
 
     @staticmethod
-    def _fetch_chunk_texts(vector_ids: list[str]) -> dict[str, str]:
-        """Batch fetch chunk_text from processed_chunks by embedding_id."""
+    def _hydrate_chunks(vector_ids: list[str]) -> dict[str, dict]:
+        """Batch fetch full chunk data from PostgreSQL by embedding_id.
+
+        Joins processed_chunks, raw_documents, and sources to get all metadata.
+        """
         if not vector_ids:
             return {}
         with engine.connect() as conn:
             rows = conn.execute(
-                text(
-                    "SELECT embedding_id, chunk_text FROM processed_chunks WHERE embedding_id = ANY(:ids)"
-                ),
+                text("""
+                    SELECT pc.embedding_id, pc.chunk_text, pc.chunk_index, pc.metadata_json,
+                           rd.url AS source_url, s.code AS source_name
+                    FROM processed_chunks pc
+                    JOIN raw_documents rd ON pc.document_id = rd.id
+                    JOIN sources s ON rd.source_id = s.id
+                    WHERE pc.embedding_id = ANY(:ids)
+                    """),
                 {"ids": vector_ids},
             ).fetchall()
-        return {row.embedding_id: row.chunk_text for row in rows}
+        return {
+            row.embedding_id: {
+                "chunk_text": row.chunk_text,
+                "chunk_index": row.chunk_index,
+                "source_url": row.source_url,
+                "source_name": row.source_name,
+                "metadata_json": row.metadata_json or {},
+            }
+            for row in rows
+        }
 
     @staticmethod
     def _map_pinecone(matches: list[dict]) -> list[ChunkResult]:
         """Convert Pinecone query matches to ChunkResult list.
 
-        Batch fetches chunk_text from processed_chunks using embedding_id.
+        Batch hydrates full chunk data from PostgreSQL using embedding_id.
+        Pinecone provides only vector ID and score; all metadata comes from DB.
         """
         if not matches:
             return []
 
         vector_ids = [m.get("id") for m in matches]
-        text_map = RetrievalService._fetch_chunk_texts(vector_ids)
+        db_map = RetrievalService._hydrate_chunks(vector_ids)
 
         results = []
         for m in matches:
+            db = db_map.get(m.get("id"), {})
+            meta = db.get("metadata_json", {})
+            tags = meta.get("tags", {})
             results.append(
                 ChunkResult(
-                    text=text_map.get(m.get("id"), ""),
+                    text=db.get("chunk_text", ""),
                     score=m.get("score", 0.0),
-                    source_url=m.get("source_url", ""),
-                    source_name=m.get("source_name", ""),
-                    title=m.get("title", ""),
-                    section=m.get("section", ""),
-                    chunk_index=int(m.get("chunk_index", 0)),
-                    chunk_type=m.get("chunk_type", "text"),
-                    property_types=m.get("property_types") or [],
-                    citizenship_types=m.get("citizenship_types") or [],
-                    effective_date=m.get("effective_date", ""),
-                    topic_tags=m.get("topic_tags") or [],
+                    source_url=db.get("source_url", ""),
+                    source_name=db.get("source_name", ""),
+                    title=meta.get("title", ""),
+                    section=meta.get("section", ""),
+                    chunk_index=int(db.get("chunk_index", 0)),
+                    chunk_type=meta.get("chunk_type", "text"),
+                    property_types=tags.get("property_type") or [],
+                    citizenship_types=tags.get("citizenship") or [],
+                    effective_date=meta.get("effective_date", ""),
+                    topic_tags=tags.get("topic") or [],
                 )
             )
         return results

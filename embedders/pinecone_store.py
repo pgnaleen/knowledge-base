@@ -176,20 +176,10 @@ class PineconeStore:
     @staticmethod
     def _build_metadata(result: EmbeddingResult) -> dict:
         chunk = result.chunk
-        meta: dict = {
-            "source_name": chunk.source_name,
-            "source_url": chunk.source_url,
-            "chunk_index": chunk.chunk_index,
-            "chunk_type": chunk.chunk_type,
-            "word_count": chunk.word_count,
-        }
         m = chunk.metadata or {}
-        meta["title"] = m.get("title", "")
-        meta["section"] = m.get("section", "")
-        meta["source_agency"] = m.get("source_agency", "")
-        meta["effective_date"] = m.get("effective_date", "")
         tags = m.get("tags", {})
-        meta["topic_tags"] = tags.get("topic", [])
-        meta["property_types"] = tags.get("property_type", [])
-        meta["citizenship_types"] = tags.get("citizenship", [])
-        return meta
+        return {
+            "source_name": chunk.source_name,
+            "property_types": tags.get("property_type", []),
+            "citizenship_types": tags.get("citizenship", []),
+        }
