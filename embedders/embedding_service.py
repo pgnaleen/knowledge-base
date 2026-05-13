@@ -46,7 +46,9 @@ class EmbeddingService:
             )
             logger.debug("embed.provider_configured", provider="openrouter")
         else:
-            logger.debug("embed.provider_skipped", provider="openrouter", reason="no OPENROUTER_API_KEY")
+            logger.debug(
+                "embed.provider_skipped", provider="openrouter", reason="no OPENROUTER_API_KEY"
+            )
 
         self._openai_client: OpenAI | None = None
         if openai_key:
@@ -79,7 +81,9 @@ class EmbeddingService:
         for batch in self._batches(chunks):
             batch_num += 1
             texts = [c.chunk_text for c in batch]
-            vectors, token_count, provider_used = self._embed_batch_with_fallback(texts, batch_num, total_batches)
+            vectors, token_count, provider_used = self._embed_batch_with_fallback(
+                texts, batch_num, total_batches
+            )
             total_tokens += token_count
             per_chunk_tokens = token_count // len(batch) if batch else 0
 
@@ -111,6 +115,14 @@ class EmbeddingService:
             model=EMBEDDING_MODEL,
         )
         return results
+
+    def embed_query(self, query: str) -> list[float]:
+        """Embed a single query string for retrieval."""
+        if not query:
+            raise ValueError("Query cannot be empty")
+
+        vectors, _, _ = self._embed_batch_with_fallback([query], 1, 1)
+        return vectors[0]
 
     def _embed_batch_with_fallback(
         self,
@@ -173,14 +185,10 @@ class EmbeddingService:
             model=EMBEDDING_MODEL,
             input=texts,
         )
-        vectors = [
-            item.embedding for item in sorted(response.data, key=lambda x: x.index)
-        ]
+        vectors = [item.embedding for item in sorted(response.data, key=lambda x: x.index)]
         return vectors, response.usage.total_tokens
 
-    def _batches(
-        self, chunks: list[DocumentChunk]
-    ) -> Iterator[list[DocumentChunk]]:
+    def _batches(self, chunks: list[DocumentChunk]) -> Iterator[list[DocumentChunk]]:
         """Yield batches respecting both item count and token limits."""
         enc = tiktoken.get_encoding("cl100k_base")
         current_batch: list[DocumentChunk] = []
@@ -189,8 +197,7 @@ class EmbeddingService:
         for chunk in chunks:
             n = len(enc.encode(chunk.chunk_text))
             if current_batch and (
-                current_tokens + n > TOKEN_LIMIT_PER_BATCH
-                or len(current_batch) >= self._batch_size
+                current_tokens + n > TOKEN_LIMIT_PER_BATCH or len(current_batch) >= self._batch_size
             ):
                 yield current_batch
                 current_batch = []

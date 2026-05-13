@@ -1,0 +1,46 @@
+"""Pydantic request / response models for the Retrieval API."""
+
+from pydantic import BaseModel, Field
+
+
+class FilterParams(BaseModel):
+    """Optional metadata filters for narrowing retrieval scope."""
+
+    source: list[str] | None = None
+    property_type: list[str] | None = None
+    citizenship_type: list[str] | None = None
+
+
+class RetrieveRequest(BaseModel):
+    """POST /retrieve request body."""
+
+    query: str = Field(min_length=1)
+    top_k: int = Field(default=5, ge=1, le=50)
+    filters: FilterParams = Field(default_factory=FilterParams)
+
+
+class ChunkResult(BaseModel):
+    """A single retrieved chunk with score and provenance."""
+
+    text: str
+    score: float
+    source_url: str
+    source_name: str
+    title: str
+    section: str
+    chunk_index: int
+    chunk_type: str
+    property_types: list[str]
+    citizenship_types: list[str]
+    effective_date: str
+    topic_tags: list[str]
+
+
+class RetrieveResponse(BaseModel):
+    """POST /retrieve response body."""
+
+    query: str
+    results: list[ChunkResult]
+    total: int
+    latency_ms: float
+    store_used: str

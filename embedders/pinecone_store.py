@@ -93,6 +93,32 @@ class PineconeStore:
         )
         return id_map
 
+    def query(
+        self,
+        vector: list[float],
+        top_k: int,
+        filter_dict: dict | None = None,
+        namespace: str = "all",
+    ) -> list[dict]:
+        """ANN search on Pinecone. Returns list of matches with id, score, and metadata."""
+        results = self._query_with_retry(vector, top_k, filter_dict, namespace)
+        matches = []
+        for match in results.matches:
+            matches.append(
+                {
+                    "id": match.id,
+                    "score": match.score,
+                    **match.metadata,
+                }
+            )
+        logger.debug(
+            "pinecone.query_complete",
+            namespace=namespace,
+            top_k=top_k,
+            matches_returned=len(matches),
+        )
+        return matches
+
     def delete_all_in_namespace(self, namespace: str) -> None:
         """Delete every vector in a namespace. Used for full purge when DB is wiped."""
         self._index.delete(delete_all=True, namespace=namespace)
@@ -116,11 +142,34 @@ class PineconeStore:
             namespaces=namespaces,
         )
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30), reraise=True)
+    @retry(
+        stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30), reraise=True
+    )
+    def _query_with_retry(
+        self,
+        vector: list[float],
+        top_k: int,
+        filter_dict: dict | None = None,
+        namespace: str = "all",
+    ):
+        """Query the index with retry logic."""
+        return self._index.query(
+            vector=vector,
+            top_k=top_k,
+            filter=filter_dict,
+            namespace=namespace,
+            include_metadata=True,
+        )
+
+    @retry(
+        stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30), reraise=True
+    )
     def _delete_batch(self, vector_ids: list[str], namespace: str) -> None:
         self._index.delete(ids=vector_ids, namespace=namespace)
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30), reraise=True)
+    @retry(
+        stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30), reraise=True
+    )
     def _upsert_batch(self, batch: list[dict], namespace: str) -> None:
         self._index.upsert(vectors=batch, namespace=namespace)
 
