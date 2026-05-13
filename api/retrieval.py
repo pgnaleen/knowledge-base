@@ -6,6 +6,7 @@ from sqlalchemy import text
 
 from config.database import engine
 from config.logger import get_logger
+from embedders.bm25_store import BM25Store
 from embedders.embedding_service import EmbeddingService
 from embedders.pgvector_store import PgVectorStore
 from embedders.pinecone_store import PineconeStore
@@ -27,10 +28,12 @@ class RetrievalService:
         embedding_service: EmbeddingService,
         pinecone_store: PineconeStore | None,
         pgvector_store: PgVectorStore,
+        bm25_store: BM25Store | None = None,
     ) -> None:
         self._embedding_service = embedding_service
         self._pinecone = pinecone_store
         self._pgvector = pgvector_store
+        self._bm25 = bm25_store
 
     def retrieve(self, request: RetrieveRequest) -> RetrieveResponse:
         """Embed the query, query the vector store, and return ranked results."""
@@ -52,7 +55,17 @@ class RetrievalService:
         vector: list[float],
         request: RetrieveRequest,
     ) -> tuple[list[ChunkResult], str]:
-        """Try Pinecone; fall back to pgvector on failure or unavailability."""
+        """Query vector store ± BM25 based on search_mode."""
+        if request.search_mode == "hybrid" and self._bm25 is not None:
+            return self._query_hybrid(vector, request)
+        return self._query_vector(vector, request)
+
+    def _query_vector(
+        self,
+        vector: list[float],
+        request: RetrieveRequest,
+    ) -> tuple[list[ChunkResult], str]:
+        """Pure vector search: Pinecone → pgvector fallback."""
         if self._pinecone is not None:
             namespace, filter_dict = self._resolve_namespace_and_filter(request.filters)
             try:
@@ -69,6 +82,49 @@ class RetrievalService:
             citizenship_filter=request.filters.citizenship_type,
         )
         return self._map_pgvector(rows), "pgvector"
+
+    def _query_hybrid(
+        self,
+        vector: list[float],
+        request: RetrieveRequest,
+    ) -> tuple[list[ChunkResult], str]:
+        """Hybrid search: vector + BM25 → RRF fusion."""
+        fetch_k = request.top_k * 5
+
+        vector_ids = []
+        store_used = "pgvector"
+
+        if self._pinecone is not None:
+            try:
+                namespace, filter_dict = self._resolve_namespace_and_filter(request.filters)
+                matches = self._pinecone.query(vector, fetch_k, filter_dict, namespace)
+                vector_ids = [m["id"] for m in matches]
+                store_used = "pinecone"
+            except Exception as exc:
+                logger.warning("retrieval.pinecone_failed_hybrid", error=str(exc))
+
+        if not vector_ids:
+            rows = self._pgvector.query(
+                vector,
+                fetch_k,
+                source_filter=request.filters.source,
+                property_type_filter=request.filters.property_type,
+                citizenship_filter=request.filters.citizenship_type,
+            )
+            vector_ids = [row["embedding_id"] for row in rows if row.get("embedding_id")]
+            store_used = "pgvector"
+
+        bm25_results = self._bm25.query(
+            request.query,
+            fetch_k,
+            source_filter=request.filters.source,
+        )
+        bm25_ids = [eid for eid, _ in bm25_results]
+
+        fused_ids = self._fuse_rrf(vector_ids, bm25_ids, k=60, top_k=request.top_k)
+        results = self._map_hybrid(fused_ids)
+
+        return results, f"hybrid_{store_used}"
 
     def _resolve_namespace_and_filter(
         self,
@@ -93,6 +149,62 @@ class RetrievalService:
             )
 
         return "all", self._combine_conditions(metadata_conditions)
+
+    @staticmethod
+    def _fuse_rrf(
+        vector_ids: list[str],
+        bm25_ids: list[str],
+        k: int = 60,
+        top_k: int = 5,
+    ) -> list[str]:
+        """Reciprocal Rank Fusion: score = 1/(k+rank_v) + 1/(k+rank_b)."""
+        v_rank = {vid: i + 1 for i, vid in enumerate(vector_ids)}
+        b_rank = {bid: i + 1 for i, bid in enumerate(bm25_ids)}
+        all_ids = set(vector_ids) | set(bm25_ids)
+        default_rank = max(len(vector_ids), len(bm25_ids), 1) + 1
+
+        scores = {
+            id_: 1 / (k + v_rank.get(id_, default_rank)) + 1 / (k + b_rank.get(id_, default_rank))
+            for id_ in all_ids
+        }
+        return sorted(scores, key=scores.__getitem__, reverse=True)[:top_k]
+
+    def _map_hybrid(self, fused_ids: list[str]) -> list[ChunkResult]:
+        """Map fused IDs to ChunkResult, computing RRF scores for ranking."""
+        if not fused_ids:
+            return []
+
+        db_map = self._hydrate_chunks(fused_ids)
+        results = []
+
+        for rank, id_ in enumerate(fused_ids, 1):
+            db = db_map.get(id_, {})
+            if not db:
+                continue
+
+            meta = db.get("metadata_json", {})
+            tags = meta.get("tags", {})
+
+            rrf_score = 1 / (60 + rank)
+
+            results.append(
+                ChunkResult(
+                    text=db.get("chunk_text", ""),
+                    score=rrf_score,
+                    source_url=db.get("source_url", ""),
+                    source_name=db.get("source_name", ""),
+                    title=meta.get("title", ""),
+                    section=meta.get("section", ""),
+                    chunk_index=int(db.get("chunk_index", 0)),
+                    chunk_type=meta.get("chunk_type", "text"),
+                    property_types=tags.get("property_type") or [],
+                    citizenship_types=tags.get("citizenship") or [],
+                    effective_date=meta.get("effective_date", ""),
+                    topic_tags=tags.get("topic") or [],
+                )
+            )
+
+        return results
 
     @staticmethod
     def _combine_conditions(conditions: list[dict]) -> dict | None:

@@ -5,6 +5,7 @@ get_retrieval_service() is used as a FastAPI dependency on each request.
 """
 
 from config.logger import get_logger
+from embedders.bm25_store import BM25Store
 from embedders.embedding_service import EmbeddingService
 from embedders.pgvector_store import PgVectorStore
 from embedders.pinecone_store import PineconeStore
@@ -28,8 +29,21 @@ def init_services() -> None:
     except Exception as exc:
         logger.warning("api.pinecone_unavailable", error=str(exc))
 
-    _retrieval_service = RetrievalService(embedding_svc, pinecone, PgVectorStore())
-    logger.info("api.services_ready", pinecone_available=pinecone is not None)
+    bm25: BM25Store | None = None
+    try:
+        bm25 = BM25Store()
+        count = bm25.build()
+        logger.info("api.bm25_ready", corpus_size=count)
+    except Exception as exc:
+        logger.warning("api.bm25_unavailable", error=str(exc))
+        bm25 = None
+
+    _retrieval_service = RetrievalService(embedding_svc, pinecone, PgVectorStore(), bm25)
+    logger.info(
+        "api.services_ready",
+        pinecone_available=pinecone is not None,
+        bm25_available=bm25 is not None,
+    )
 
 
 def get_retrieval_service() -> RetrievalService:

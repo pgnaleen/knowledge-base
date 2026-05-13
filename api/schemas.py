@@ -1,5 +1,7 @@
 """Pydantic request / response models for the Retrieval API."""
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -17,6 +19,7 @@ class RetrieveRequest(BaseModel):
     query: str = Field(min_length=1)
     top_k: int = Field(default=5, ge=1, le=50)
     filters: FilterParams = Field(default_factory=FilterParams)
+    search_mode: Literal["vector", "hybrid"] = "hybrid"
 
 
 class ChunkResult(BaseModel):

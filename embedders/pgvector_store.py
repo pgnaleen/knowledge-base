@@ -88,7 +88,7 @@ class PgVectorStore:
             where_sql = " AND ".join(where_clauses)
             sql = f"""
                 SELECT
-                    pc.id,
+                    pc.embedding_id,
                     pc.chunk_text,
                     pc.chunk_index,
                     pc.metadata_json,
@@ -124,6 +124,7 @@ class PgVectorStore:
 
                 matches.append(
                     {
+                        "embedding_id": row.embedding_id,
                         "chunk_text": row.chunk_text,
                         "score": row.score,
                         "source_url": row.source_url,
