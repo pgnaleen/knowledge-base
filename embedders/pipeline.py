@@ -80,7 +80,16 @@ class EmbeddingPipeline:
         chunks: list[DocumentChunk] = []
 
         for row in rows:
-            chunk_id, chunk_text_val, chunk_index, token_count, metadata_json, source_url, content_type, src_code = row
+            (
+                chunk_id,
+                chunk_text_val,
+                chunk_index,
+                token_count,
+                metadata_json,
+                source_url,
+                content_type,
+                src_code,
+            ) = row
             db_ids.append(chunk_id)
             chunks.append(
                 DocumentChunk(
@@ -118,7 +127,12 @@ class EmbeddingPipeline:
                 store_used = "pinecone"
             except Exception as exc:
                 logger.warning("pipeline.pinecone_upsert_failed", error=str(exc))
-                logger.info("pgvector.storing", source=source_code or "all", chunks=len(results), reason="pinecone_fallback")
+                logger.info(
+                    "pgvector.storing",
+                    source=source_code or "all",
+                    chunks=len(results),
+                    reason="pinecone_fallback",
+                )
                 id_map = self._pgvector_store.upsert(results, db_ids)
         else:
             logger.info("pgvector.storing", source=source_code or "all", chunks=len(results))
@@ -144,15 +158,15 @@ class EmbeddingPipeline:
                 try:
                     upload_embeddings(f"{batch_id}/{vector_id}", payload)
                 except Exception as exc:
-                    logger.warning("pipeline.s3_archive_failed", vector_id=vector_id, error=str(exc))
+                    logger.warning(
+                        "pipeline.s3_archive_failed", vector_id=vector_id, error=str(exc)
+                    )
 
         # Update embedding_id in DB
         with self._engine.begin() as conn:
             for chunk_id, vector_id in id_map.items():
                 conn.execute(
-                    text(
-                        "UPDATE processed_chunks SET embedding_id = :eid WHERE id = :id"
-                    ),
+                    text("UPDATE processed_chunks SET embedding_id = :eid WHERE id = :id"),
                     {"eid": vector_id, "id": chunk_id},
                 )
 
@@ -166,7 +180,6 @@ class EmbeddingPipeline:
             store=store_used,
         )
         return len(results)
-
 
     def cleanup_deleted_documents(self, source_codes: list[str] | None = None) -> int:
         """Delete chunks and vectors for all raw_documents with status='deleted'.
@@ -184,6 +197,7 @@ class EmbeddingPipeline:
             query = db.query(RawDocument).filter(RawDocument.status == "deleted")
             if source_codes:
                 from config.models import Source
+
                 query = query.join(Source).filter(
                     Source.code.in_([c.lower() for c in source_codes])
                 )
@@ -200,41 +214,67 @@ class EmbeddingPipeline:
                 source_name = doc.source.code if doc.source else "unknown"
                 chunks = db.query(ProcessedChunk).filter_by(document_id=doc.id).all()
 
-                if not chunks:
-                    logger.debug("cleanup.doc_no_chunks", url=doc.url, source=source_name)
-                    continue
+                if chunks:
+                    embedding_ids = [c.embedding_id for c in chunks if c.embedding_id]
+                    logger.info(
+                        "cleanup.doc_found",
+                        url=doc.url,
+                        source=source_name,
+                        chunks=len(chunks),
+                        vectors=len(embedding_ids),
+                    )
 
-                embedding_ids = [c.embedding_id for c in chunks if c.embedding_id]
-                logger.debug(
-                    "cleanup.doc_found",
-                    url=doc.url,
-                    source=source_name,
-                    chunks=len(chunks),
-                    vectors=len(embedding_ids),
-                )
+                    # Delete from Pinecone
+                    if embedding_ids and self._pinecone_store is not None:
+                        try:
+                            self._pinecone_store.delete_vectors(embedding_ids, source_name)
+                            logger.info(
+                                "cleanup.vectors_deleted",
+                                url=doc.url,
+                                source=source_name,
+                                count=len(embedding_ids),
+                                store="pinecone",
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "cleanup.pinecone_delete_failed",
+                                url=doc.url,
+                                source=source_name,
+                                error=str(exc),
+                            )
 
-                # Delete from Pinecone
-                if embedding_ids and self._pinecone_store is not None:
+                    # Delete processed_chunks (pgvector embedding column goes with the row)
+                    db.query(ProcessedChunk).filter_by(document_id=doc.id).delete()
+                    db.commit()
+                else:
+                    logger.info(
+                        "cleanup.doc_no_chunks",
+                        url=doc.url,
+                        source=source_name,
+                    )
+                    embedding_ids = []
+
+                # Delete MinIO file if it exists
+                if doc.s3_path:
                     try:
-                        self._pinecone_store.delete_vectors(embedding_ids, source_name)
-                        logger.debug(
-                            "cleanup.vectors_deleted",
+                        from config.storage import delete_s3_object
+
+                        delete_s3_object(doc.s3_path)
+                        logger.info(
+                            "cleanup.minio_deleted",
                             url=doc.url,
+                            s3_path=doc.s3_path,
                             source=source_name,
-                            count=len(embedding_ids),
-                            store="pinecone",
                         )
                     except Exception as exc:
                         logger.warning(
-                            "cleanup.pinecone_delete_failed",
+                            "cleanup.minio_delete_failed",
                             url=doc.url,
-                            source=source_name,
+                            s3_path=doc.s3_path,
                             error=str(exc),
                         )
-
-                # Delete processed_chunks (pgvector embedding column goes with the row)
-                db.query(ProcessedChunk).filter_by(document_id=doc.id).delete()
-                db.commit()
+                else:
+                    logger.debug("cleanup.minio_no_path", url=doc.url, source=source_name)
 
                 logger.info(
                     "cleanup.doc_cleaned",
@@ -259,7 +299,6 @@ class EmbeddingPipeline:
         finally:
             db.close()
 
-
     def purge_vectors(self, source_codes: list[str] | None = None) -> None:
         """Delete ALL vectors from Pinecone for given sources (or every namespace if none given).
 
@@ -268,13 +307,17 @@ class EmbeddingPipeline:
         If source_codes is None, purges all 5 source namespaces + 'all'.
         """
         if self._pinecone_store is None:
-            logger.warning("purge.pinecone_unavailable", reason="Pinecone not configured — nothing to purge")
+            logger.warning(
+                "purge.pinecone_unavailable", reason="Pinecone not configured — nothing to purge"
+            )
             return
 
         _ALL_SOURCES = ["hdb", "ura", "iras", "mas", "cpf"]
         sources = [c.lower() for c in source_codes] if source_codes else _ALL_SOURCES
 
-        namespaces = list(sources) + (["all"] if not source_codes or set(sources) == set(_ALL_SOURCES) else [])
+        namespaces = list(sources) + (
+            ["all"] if not source_codes or set(sources) == set(_ALL_SOURCES) else []
+        )
 
         logger.info("purge.started", namespaces=namespaces)
         for ns in namespaces:

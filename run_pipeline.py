@@ -54,10 +54,7 @@ def _print_crawl_summary(summary: list[dict]) -> None:
     cols = ["source", "pages_found", "pages_new", "pages_changed", "pages_deleted", "pages_errored"]
     headers = ["Source", "Found", "New", "Updated", "Deleted", "Errored"]
 
-    widths = [
-        max(len(h), max(len(str(row[c])) for row in summary))
-        for h, c in zip(headers, cols)
-    ]
+    widths = [max(len(h), max(len(str(row[c])) for row in summary)) for h, c in zip(headers, cols)]
 
     def _row(values: list) -> str:
         return "  ".join(str(v).ljust(w) for v, w in zip(values, widths))
@@ -83,13 +80,10 @@ def _print_process_summary(summary: list[dict]) -> None:
         print("\n(no documents processed)\n", flush=True)
         return
 
-    cols    = ["source", "docs", "chunks", "dropped", "avg_chunks", "failed"]
+    cols = ["source", "docs", "chunks", "dropped", "avg_chunks", "failed"]
     headers = ["Source", "Docs", "Chunks", "Dropped", "Avg/Doc", "Failed"]
 
-    widths = [
-        max(len(h), max(len(str(row[c])) for row in summary))
-        for h, c in zip(headers, cols)
-    ]
+    widths = [max(len(h), max(len(str(row[c])) for row in summary)) for h, c in zip(headers, cols)]
 
     def _row(values: list) -> str:
         return "  ".join(str(v).ljust(w) for v, w in zip(values, widths))
@@ -104,12 +98,15 @@ def _print_process_summary(summary: list[dict]) -> None:
     for row in summary:
         print(_row([row[c] for c in cols]), flush=True)
     print(divider, flush=True)
-    totals_docs    = sum(r["docs"]    for r in summary)
-    totals_chunks  = sum(r["chunks"]  for r in summary)
+    totals_docs = sum(r["docs"] for r in summary)
+    totals_chunks = sum(r["chunks"] for r in summary)
     totals_dropped = sum(r["dropped"] for r in summary)
-    totals_failed  = sum(r["failed"]  for r in summary)
-    avg_total      = round(totals_chunks / totals_docs, 1) if totals_docs else 0
-    print(_row(["TOTAL", totals_docs, totals_chunks, totals_dropped, avg_total, totals_failed]), flush=True)
+    totals_failed = sum(r["failed"] for r in summary)
+    avg_total = round(totals_chunks / totals_docs, 1) if totals_docs else 0
+    print(
+        _row(["TOTAL", totals_docs, totals_chunks, totals_dropped, avg_total, totals_failed]),
+        flush=True,
+    )
     print(f"{'═' * len(divider)}\n", flush=True)
 
 
@@ -166,6 +163,7 @@ def main():
     # ── Purge vectors (standalone destructive operation) ──────────────────────
     if purge_vectors:
         from embedders.pipeline import EmbeddingPipeline
+
         _banner("PURGE PINECONE VECTORS")
         pipeline = EmbeddingPipeline(
             openai_api_key=settings.openai_api_key or None,
@@ -189,14 +187,14 @@ def main():
     # ── Post-crawl cleanup: delete vectors for removed pages ──────────────────
     if do_crawl:
         from embedders.pipeline import EmbeddingPipeline
+
         _cleanup = EmbeddingPipeline(
             openai_api_key=settings.openai_api_key or None,
             pinecone_api_key=settings.pinecone_api_key or None,
             pinecone_index=settings.pinecone_index or None,
         )
         cleaned = _cleanup.cleanup_deleted_documents(source_codes=source_codes)
-        if cleaned:
-            logger.info("stage.cleanup_done", docs_cleaned=cleaned)
+        logger.info("stage.cleanup_done", docs_cleaned=cleaned)
 
     # ── Stage 2: Extract → Chunk → Validate → Save ────────────────────────────
     if do_process:
@@ -219,7 +217,7 @@ def main():
             pinecone_api_key=settings.pinecone_api_key or None,
             pinecone_index=settings.pinecone_index or None,
         )
-        for code in (source_codes or [None]):
+        for code in source_codes or [None]:
             stats = pipeline.embed_chunks(source_code=code)
             logger.info("stage.embed_source_done", source=code or "all", embedded=stats)
         logger.info("stage.embed_done")
