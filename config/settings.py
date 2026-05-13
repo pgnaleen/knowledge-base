@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     # OpenAI (fallback embedding provider)
     openai_api_key: str = ""
 
+    # OpenRouter chat model (query expansion)
+    openrouter_chat_model: str = "openai/gpt-4o-mini"
+
     # Pinecone
     pinecone_api_key: str = ""
     pinecone_index: str = "kb-pipeline"

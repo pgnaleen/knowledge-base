@@ -11,6 +11,7 @@ from embedders.embedding_service import EmbeddingService
 from embedders.pgvector_store import PgVectorStore
 from embedders.pinecone_store import PineconeStore
 
+from api.query_expander import QueryExpander
 from api.schemas import ChunkResult, FilterParams, RetrieveRequest, RetrieveResponse
 
 logger = get_logger("retrieval")
@@ -29,17 +30,38 @@ class RetrievalService:
         pinecone_store: PineconeStore | None,
         pgvector_store: PgVectorStore,
         bm25_store: BM25Store | None = None,
+        query_expander: QueryExpander | None = None,
     ) -> None:
         self._embedding_service = embedding_service
         self._pinecone = pinecone_store
         self._pgvector = pgvector_store
         self._bm25 = bm25_store
+        self._expander = query_expander
 
     def retrieve(self, request: RetrieveRequest) -> RetrieveResponse:
-        """Embed the query, query the vector store, and return ranked results."""
+        """Embed the query (with expansion if available), query stores, and return ranked results."""
         start = time.perf_counter()
-        vector = self._embedding_service.embed_query(request.query)
-        results, store_used = self._query_stores(vector, request)
+
+        phrasings = [request.query]
+        auto_filters = FilterParams()
+        if self._expander is not None:
+            expanded = self._expander.expand(request.query)
+            phrasings = expanded.phrasings
+
+        merged_filters = self._merge_filters(request.filters, auto_filters)
+
+        all_results: dict[str, ChunkResult] = {}
+        store_used = "pgvector"
+        for phrase in phrasings:
+            vector = self._embedding_service.embed_query(phrase)
+            sub_req = request.model_copy(update={"query": phrase, "filters": merged_filters})
+            results, store_used = self._query_stores(vector, sub_req)
+            for r in results:
+                key = f"{r.source_url}:{r.chunk_index}"
+                if key not in all_results or r.score > all_results[key].score:
+                    all_results[key] = r
+
+        results = sorted(all_results.values(), key=lambda r: r.score, reverse=True)[: request.top_k]
         latency_ms = round((time.perf_counter() - start) * 1000, 2)
         self._log(request, results, latency_ms, store_used)
         return RetrieveResponse(
@@ -205,6 +227,15 @@ class RetrievalService:
             )
 
         return results
+
+    @staticmethod
+    def _merge_filters(user: FilterParams, auto: FilterParams) -> FilterParams:
+        """Merge user-supplied and auto-detected filters. User takes precedence."""
+        return FilterParams(
+            source=user.source,
+            property_type=user.property_type or auto.property_type or None,
+            citizenship_type=user.citizenship_type or auto.citizenship_type or None,
+        )
 
     @staticmethod
     def _combine_conditions(conditions: list[dict]) -> dict | None:

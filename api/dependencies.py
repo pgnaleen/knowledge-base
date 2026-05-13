@@ -5,11 +5,13 @@ get_retrieval_service() is used as a FastAPI dependency on each request.
 """
 
 from config.logger import get_logger
+from config.settings import settings
 from embedders.bm25_store import BM25Store
 from embedders.embedding_service import EmbeddingService
 from embedders.pgvector_store import PgVectorStore
 from embedders.pinecone_store import PineconeStore
 
+from api.query_expander import QueryExpander
 from api.retrieval import RetrievalService
 
 logger = get_logger("api.dependencies")
@@ -38,11 +40,22 @@ def init_services() -> None:
         logger.warning("api.bm25_unavailable", error=str(exc))
         bm25 = None
 
-    _retrieval_service = RetrievalService(embedding_svc, pinecone, PgVectorStore(), bm25)
+    expander: QueryExpander | None = None
+    try:
+        from openai import OpenAI
+
+        client = OpenAI(api_key=settings.openrouter_api_key, base_url=settings.openrouter_base_url)
+        expander = QueryExpander(client, settings.openrouter_chat_model)
+        logger.info("api.expander_ready", model=settings.openrouter_chat_model)
+    except Exception as exc:
+        logger.warning("api.expander_unavailable", error=str(exc))
+
+    _retrieval_service = RetrievalService(embedding_svc, pinecone, PgVectorStore(), bm25, expander)
     logger.info(
         "api.services_ready",
         pinecone_available=pinecone is not None,
         bm25_available=bm25 is not None,
+        expander_available=expander is not None,
     )
 
 
