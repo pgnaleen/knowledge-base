@@ -2,6 +2,7 @@
 
 import json
 import re
+import time
 from dataclasses import dataclass, field
 
 from openai import OpenAI
@@ -19,6 +20,8 @@ class ExpandedQuery:
     property_type: list[str] = field(default_factory=list)
     citizenship: list[str] = field(default_factory=list)
     topic: list[str] = field(default_factory=list)
+    expanded_text: str = ""
+    latency_ms: float = 0.0
 
 
 class QueryExpander:
@@ -60,11 +63,16 @@ class QueryExpander:
             Falls back to [query] if LLM fails.
         """
         expanded_text = self._expand_abbreviations(query)
+        t0 = time.perf_counter()
         try:
-            return self._call_llm(expanded_text, original=query)
+            result = self._call_llm(expanded_text, original=query)
+            result.latency_ms = round((time.perf_counter() - t0) * 1000, 2)
+            result.expanded_text = expanded_text
+            return result
         except Exception as exc:
             logger.warning("query_expander.llm_failed", error=str(exc), query=query)
-            return ExpandedQuery(phrasings=[query])
+            latency_ms = round((time.perf_counter() - t0) * 1000, 2)
+            return ExpandedQuery(phrasings=[query], expanded_text=expanded_text, latency_ms=latency_ms)
 
     def _expand_abbreviations(self, text: str) -> str:
         """Replace Singapore property domain abbreviations with full forms."""

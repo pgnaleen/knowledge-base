@@ -5,6 +5,28 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
+class EntitiesExtracted(BaseModel):
+    """Entities extracted from query during expansion."""
+
+    property_type: list[str] = []
+    citizenship: list[str] = []
+    topic: list[str] = []
+
+
+class RetrievalTrace(BaseModel):
+    """Trace of retrieval pipeline execution (visible in debug mode)."""
+
+    original_query: str
+    expanded_query: str
+    phrasings: list[str]
+    entities_extracted: EntitiesExtracted
+    expansion_latency_ms: float
+    embedding_latency_ms: float
+    search_latency_ms: float
+    results_per_phrasing: list[int]
+    expander_used: bool
+
+
 class FilterParams(BaseModel):
     """Optional metadata filters for narrowing retrieval scope."""
 
@@ -47,3 +69,4 @@ class RetrieveResponse(BaseModel):
     total: int
     latency_ms: float
     store_used: str
+    trace: RetrievalTrace | None = None

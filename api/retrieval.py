@@ -11,8 +11,8 @@ from embedders.embedding_service import EmbeddingService
 from embedders.pgvector_store import PgVectorStore
 from embedders.pinecone_store import PineconeStore
 
-from api.query_expander import QueryExpander
-from api.schemas import ChunkResult, FilterParams, RetrieveRequest, RetrieveResponse
+from api.query_expander import ExpandedQuery, QueryExpander
+from api.schemas import ChunkResult, EntitiesExtracted, FilterParams, RetrieveRequest, RetrieveResponse, RetrievalTrace
 
 logger = get_logger("retrieval")
 
@@ -43,33 +43,63 @@ class RetrievalService:
         start = time.perf_counter()
 
         phrasings = [request.query]
-        auto_filters = FilterParams()
+        expanded: ExpandedQuery | None = None
         if self._expander is not None:
             expanded = self._expander.expand(request.query)
             phrasings = expanded.phrasings
 
-        merged_filters = self._merge_filters(request.filters, auto_filters)
+        merged_filters = self._merge_filters(request.filters, FilterParams())
 
         all_results: dict[str, ChunkResult] = {}
         store_used = "pgvector"
+        results_per_phrasing: list[int] = []
+        search_total_ms = 0.0
+
+        embed_start = time.perf_counter()
         for phrase in phrasings:
             vector = self._embedding_service.embed_query(phrase)
             sub_req = request.model_copy(update={"query": phrase, "filters": merged_filters})
+
+            s_start = time.perf_counter()
             results, store_used = self._query_stores(vector, sub_req)
+            search_total_ms += (time.perf_counter() - s_start) * 1000
+
+            results_per_phrasing.append(len(results))
             for r in results:
                 key = f"{r.source_url}:{r.chunk_index}"
                 if key not in all_results or r.score > all_results[key].score:
                     all_results[key] = r
 
-        results = sorted(all_results.values(), key=lambda r: r.score, reverse=True)[: request.top_k]
+        embedding_latency_ms = round((time.perf_counter() - embed_start) * 1000 - search_total_ms, 2)
+        final_results = sorted(all_results.values(), key=lambda r: r.score, reverse=True)[: request.top_k]
         latency_ms = round((time.perf_counter() - start) * 1000, 2)
-        self._log(request, results, latency_ms, store_used)
+
+        trace = None
+        if expanded is not None:
+            trace = RetrievalTrace(
+                original_query=request.query,
+                expanded_query=expanded.expanded_text,
+                phrasings=expanded.phrasings,
+                entities_extracted=EntitiesExtracted(
+                    property_type=expanded.property_type,
+                    citizenship=expanded.citizenship,
+                    topic=expanded.topic,
+                ),
+                expansion_latency_ms=expanded.latency_ms,
+                embedding_latency_ms=embedding_latency_ms,
+                search_latency_ms=round(search_total_ms, 2),
+                results_per_phrasing=results_per_phrasing,
+                expander_used=True,
+            )
+
+        self._log(request, final_results, latency_ms, store_used)
         return RetrieveResponse(
             query=request.query,
-            results=results,
-            total=len(results),
+            results=final_results,
+            total=len(final_results),
             latency_ms=latency_ms,
             store_used=store_used,
+            trace=trace,
         )
 
     def _query_stores(
