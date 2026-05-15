@@ -11,6 +11,7 @@ from embedders.embedding_service import EmbeddingService
 from embedders.pgvector_store import PgVectorStore
 from embedders.pinecone_store import PineconeStore
 
+from api.metadata_filter_inference import infer_filters_from_query, merge_inferred_and_expanded
 from api.query_expander import ExpandedQuery, QueryExpander
 from api.schemas import ChunkResult, EntitiesExtracted, FilterParams, RetrieveRequest, RetrieveResponse, RetrievalTrace
 
@@ -48,7 +49,11 @@ class RetrievalService:
             expanded = self._expander.expand(request.query)
             phrasings = expanded.phrasings
 
-        merged_filters = self._merge_filters(request.filters, FilterParams())
+        auto_filters = merge_inferred_and_expanded(
+            infer_filters_from_query(request.query),
+            expanded,
+        )
+        merged_filters = self._merge_filters(request.filters, auto_filters)
 
         all_results: dict[str, ChunkResult] = {}
         store_used = "pgvector"
@@ -92,13 +97,15 @@ class RetrievalService:
                 expander_used=True,
             )
 
-        self._log(request, final_results, latency_ms, store_used)
+        self._log(request, merged_filters, final_results, latency_ms, store_used)
         return RetrieveResponse(
             query=request.query,
             results=final_results,
             total=len(final_results),
             latency_ms=latency_ms,
             store_used=store_used,
+            inferred_filters=auto_filters,
+            applied_filters=merged_filters,
             trace=trace,
         )
 
@@ -170,6 +177,8 @@ class RetrievalService:
             request.query,
             fetch_k,
             source_filter=request.filters.source,
+            property_type_filter=request.filters.property_type,
+            citizenship_filter=request.filters.citizenship_type,
         )
         bm25_ids = [eid for eid, _ in bm25_results]
 
@@ -260,12 +269,8 @@ class RetrievalService:
 
     @staticmethod
     def _merge_filters(user: FilterParams, auto: FilterParams) -> FilterParams:
-        """Merge user-supplied and auto-detected filters. User takes precedence."""
-        return FilterParams(
-            source=user.source,
-            property_type=user.property_type or auto.property_type or None,
-            citizenship_type=user.citizenship_type or auto.citizenship_type or None,
-        )
+        """Merge user-supplied and auto-detected filters. Both are combined via union."""
+        return user.merge(auto)
 
     @staticmethod
     def _combine_conditions(conditions: list[dict]) -> dict | None:
@@ -371,6 +376,7 @@ class RetrievalService:
     def _log(
         self,
         request: RetrieveRequest,
+        effective_filters: FilterParams,
         results: list[ChunkResult],
         latency_ms: float,
         store_used: str,
@@ -380,6 +386,7 @@ class RetrievalService:
             query=request.query,
             top_k=request.top_k,
             filters=request.filters.model_dump(exclude_none=True),
+            effective_filters=effective_filters.model_dump(exclude_none=True),
             results_count=len(results),
             latency_ms=latency_ms,
             store_used=store_used,

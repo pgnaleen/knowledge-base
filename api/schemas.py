@@ -34,6 +34,24 @@ class FilterParams(BaseModel):
     property_type: list[str] | None = None
     citizenship_type: list[str] | None = None
 
+    def merge(self, other: "FilterParams") -> "FilterParams":
+        """Merge another FilterParams into this one using union (all unique values)."""
+
+        def union(a: list[str] | None, b: list[str] | None) -> list[str] | None:
+            if not a and not b:
+                return None
+            out: list[str] = []
+            for item in (a or []) + (b or []):
+                if item and item not in out:
+                    out.append(item)
+            return out or None
+
+        return FilterParams(
+            source=union(self.source, other.source),
+            property_type=union(self.property_type, other.property_type),
+            citizenship_type=union(self.citizenship_type, other.citizenship_type),
+        )
+
 
 class RetrieveRequest(BaseModel):
     """POST /retrieve request body."""
@@ -69,4 +87,6 @@ class RetrieveResponse(BaseModel):
     total: int
     latency_ms: float
     store_used: str
+    inferred_filters: FilterParams = Field(default_factory=FilterParams)
+    applied_filters: FilterParams = Field(default_factory=FilterParams)
     trace: RetrievalTrace | None = None

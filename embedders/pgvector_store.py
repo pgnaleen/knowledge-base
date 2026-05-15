@@ -7,6 +7,7 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 from config.database import engine
 from config.logger import get_logger
+from embedders.chunk_metadata_filters import chunk_matches_tag_filters
 from embedders.models import EmbeddingResult
 
 logger = get_logger("pgvector_store")
@@ -78,12 +79,16 @@ class PgVectorStore:
     ) -> list[dict]:
         """Execute cosine similarity search with retry logic."""
         with self._engine.connect() as conn:
-            params = {"vec": str(vector), "top_k": top_k}
+            fetch_limit = top_k
+            if property_type_filter or citizenship_filter:
+                fetch_limit = min(max(top_k * 25, 50), 500)
+
+            params = {"vec": str(vector), "top_k": fetch_limit}
             where_clauses = ["pc.embedding IS NOT NULL"]
 
             if source_filter:
-                params["sources"] = source_filter
-                where_clauses.append("s.name = ANY(:sources)")
+                params["sources"] = [s.lower() for s in source_filter]
+                where_clauses.append("s.code = ANY(:sources)")
 
             where_sql = " AND ".join(where_clauses)
             sql = f"""
@@ -92,11 +97,11 @@ class PgVectorStore:
                     pc.chunk_text,
                     pc.chunk_index,
                     pc.metadata_json,
-                    rd.source_url,
-                    s.name AS source_name,
+                    rd.url AS source_url,
+                    s.code AS source_name,
                     1 - (pc.embedding <=> CAST(:vec AS vector)) AS score
                 FROM processed_chunks pc
-                JOIN raw_documents rd ON pc.raw_document_id = rd.id
+                JOIN raw_documents rd ON pc.document_id = rd.id
                 JOIN sources s ON rd.source_id = s.id
                 WHERE {where_sql}
                 ORDER BY pc.embedding <=> CAST(:vec AS vector)
@@ -111,16 +116,8 @@ class PgVectorStore:
                 if isinstance(metadata, str):
                     metadata = json.loads(metadata)
 
-                # Filter by property_type and citizenship_type if provided
-                if property_type_filter:
-                    prop_types = metadata.get("property_types", [])
-                    if not any(pt in property_type_filter for pt in prop_types):
-                        continue
-
-                if citizenship_filter:
-                    cit_types = metadata.get("citizenship_types", [])
-                    if not any(ct in citizenship_filter for ct in cit_types):
-                        continue
+                if not chunk_matches_tag_filters(metadata, property_type_filter, citizenship_filter):
+                    continue
 
                 matches.append(
                     {
@@ -133,6 +130,8 @@ class PgVectorStore:
                         "metadata_json": metadata,
                     }
                 )
+                if len(matches) >= top_k:
+                    break
 
             logger.debug(
                 "pgvector.query_complete",
