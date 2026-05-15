@@ -8,10 +8,15 @@ from fastapi import Cookie, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from logging_config import get_logger, setup_logging
+from middleware import RequestLoggingMiddleware
 from schemas import ChatRequest, ChatResponse, HealthResponse, ReadyResponse, ResetResponse
 from session import SessionStore
 
 load_dotenv()
+setup_logging()  # Initialize structured logging
+
+log = get_logger(__name__)
 
 app = FastAPI(title="SG Property Agent", version="1.0.0")
 
@@ -28,7 +33,9 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
-app.add_middleware(SecurityHeadersMiddleware)
+# Middleware stack (LIFO order: last added = first executed)
+app.add_middleware(RequestLoggingMiddleware)  # Log all requests first
+app.add_middleware(SecurityHeadersMiddleware)  # Add security headers
 
 # CORS from environment, default to Vite dev server
 cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",")
@@ -97,3 +104,14 @@ async def reset(response: Response, session_id: str = Cookie(default=None)) -> R
     if session_id:
         _sessions.reset(session_id)
     return ResetResponse(status="ok")
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Log startup."""
+    log.info(
+        "server_startup",
+        openai_model=os.environ.get("OPENAI_MODEL", "gpt-4o"),
+        kb_url=os.environ.get("KB_PIPELINE_URL"),
+        cors_origins=os.environ.get("CORS_ORIGINS", "http://localhost:5173"),
+    )
