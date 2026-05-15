@@ -15,12 +15,12 @@ class Chunk:
 
 
 class KBPipelineClient:
-    """Client for KB-Pipeline retrieval API."""
+    """Client for KB-Pipeline retrieval API (async)."""
 
     def __init__(self, base_url: str) -> None:
         self._base_url = base_url.rstrip("/")
 
-    def retrieve(self, query: str, top_k: int = 5) -> list[Chunk]:
+    async def retrieve(self, query: str, top_k: int = 5) -> list[Chunk]:
         """Query KB-Pipeline and return chunks.
 
         Args:
@@ -33,8 +33,8 @@ class KBPipelineClient:
         Raises:
             httpx.HTTPError: If KB-Pipeline is unavailable
         """
-        with httpx.Client(timeout=30) as http:
-            resp = http.post(
+        async with httpx.AsyncClient(timeout=30) as http:
+            resp = await http.post(
                 f"{self._base_url}/retrieve",
                 json={"query": query, "top_k": top_k, "search_mode": "hybrid"},
             )

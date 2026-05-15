@@ -1,7 +1,6 @@
-"""PropertyAgent: wraps KB-Pipeline with Claude for conversational property advice."""
+"""PropertyAgent: wraps KB-Pipeline with GPT-4o for conversational property advice."""
 
-import anthropic
-import httpx
+from openai import AsyncOpenAI
 
 from client import Chunk, KBPipelineClient
 
@@ -14,23 +13,23 @@ Always mention which source your answer comes from."""
 class PropertyAgent:
     """Conversational agent for Singapore property questions."""
 
-    def __init__(self, kb_url: str, anthropic_api_key: str) -> None:
+    def __init__(self, kb_url: str, openai_api_key: str) -> None:
         self._kb = KBPipelineClient(kb_url)
-        self._claude = anthropic.Anthropic(api_key=anthropic_api_key)
+        self._openai = AsyncOpenAI(api_key=openai_api_key)
         self._history: list[dict] = []
 
-    def chat(self, question: str) -> str:
+    async def chat(self, question: str) -> str:
         """Answer a property question, maintaining conversation history.
 
         Args:
             question: User's question
 
         Returns:
-            Claude's answer grounded in KB-Pipeline context
+            GPT-4o's answer grounded in KB-Pipeline context
         """
         try:
-            chunks = self._kb.retrieve(question)
-        except httpx.HTTPError as exc:
+            chunks = await self._kb.retrieve(question)
+        except Exception as exc:
             return f"Could not connect to KB-Pipeline: {exc}. Is it running?"
 
         if not chunks:
@@ -40,13 +39,15 @@ class PropertyAgent:
         user_message = f"{context}\n\nQuestion: {question}"
 
         self._history.append({"role": "user", "content": user_message})
-        response = self._claude.messages.create(
-            model="claude-sonnet-4-6",
+        response = await self._openai.chat.completions.create(
+            model="gpt-4o",
             max_tokens=1024,
-            system=SYSTEM,
-            messages=self._history,
+            messages=[
+                {"role": "system", "content": SYSTEM},
+                *self._history,
+            ],
         )
-        answer = response.content[0].text
+        answer = response.choices[0].message.content
         self._history.append({"role": "assistant", "content": answer})
         return answer
 
