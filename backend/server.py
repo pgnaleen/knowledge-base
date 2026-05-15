@@ -10,8 +10,19 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from logging_config import get_logger, setup_logging
 from middleware import RequestLoggingMiddleware
-from schemas import ChatRequest, ChatResponse, HealthResponse, ReadyResponse, ResetResponse
+from schemas import (
+    ChatRequest,
+    ChatResponse,
+    HealthResponse,
+    ReadyResponse,
+    ResetResponse,
+    StampDutyRequest,
+    StampDutyResponse,
+    SSDRequest,
+    SSDResponse,
+)
 from session import SessionStore
+from tools.stamp_duty import BuyerProfile, PropertyType, calculate_ssd, calculate_stamp_duty
 
 load_dotenv()
 setup_logging()  # Initialize structured logging
@@ -104,6 +115,66 @@ async def reset(response: Response, session_id: str = Cookie(default=None)) -> R
     if session_id:
         _sessions.reset(session_id)
     return ResetResponse(status="ok")
+
+
+@app.post("/calculate/stamp-duty", response_model=StampDutyResponse)
+async def calculate_stamp_duty_endpoint(req: StampDutyRequest) -> StampDutyResponse:
+    """Calculate BSD + ABSD for a Singapore property purchase.
+
+    Returns breakdown by BSD tier and total duty amount.
+    """
+    result = calculate_stamp_duty(
+        price=req.purchase_price,
+        buyer_profile=BuyerProfile(req.buyer_profile),
+        property_type=PropertyType(req.property_type),
+    )
+
+    log.info(
+        "stamp_duty_calculated",
+        purchase_price=req.purchase_price,
+        buyer_profile=req.buyer_profile,
+        total_duty=result.total,
+    )
+
+    return StampDutyResponse(
+        bsd=result.bsd,
+        absd=result.absd,
+        absd_rate=result.absd_rate,
+        total=result.total,
+        breakdown=[
+            {
+                "tier_limit": tier["tier_limit"],
+                "rate": tier["rate"],
+                "taxable_amount": tier["taxable_amount"],
+                "duty": tier["duty"],
+            }
+            for tier in result.breakdown
+        ],
+        effective_rate=result.effective_rate,
+    )
+
+
+@app.post("/calculate/ssd", response_model=SSDResponse)
+async def calculate_ssd_endpoint(req: SSDRequest) -> SSDResponse:
+    """Calculate SSD (Seller's Stamp Duty) based on holding period.
+
+    SSD is only payable if sold within 3 years of purchase.
+    """
+    result = calculate_ssd(sale_price=req.sale_price, holding_years=req.holding_years)
+
+    log.info(
+        "ssd_calculated",
+        sale_price=req.sale_price,
+        holding_years=req.holding_years,
+        ssd_amount=result.ssd,
+    )
+
+    return SSDResponse(
+        ssd=result.ssd,
+        ssd_rate=result.ssd_rate,
+        sale_price=result.sale_price,
+        note=result.note,
+    )
 
 
 @app.on_event("startup")
