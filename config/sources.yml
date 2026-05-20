@@ -1,6 +1,9 @@
 # Government source definitions for crawlers
 sources:
   hdb:
+    schedule:
+      full: "0 2 * * 0"        # Weekly Sunday 2AM SGT
+      incremental: "0 6 * * *"  # Daily 6AM SGT
     name: "Housing & Development Board"
     base_url: "https://www.hdb.gov.sg"
     start_urls:
@@ -52,6 +55,9 @@ sources:
         rental: ["rental", "rent"]
 
   ura:
+    schedule:
+      full: "0 2 * * 0"
+      incremental: "0 6 * * *"
     name: "Urban Redevelopment Authority"
     base_url: "https://www.ura.gov.sg"
     start_urls:
@@ -92,6 +98,9 @@ sources:
         development: ["development", "planning", "guideline"]
 
   iras:
+    schedule:
+      full: "0 2 * * 0"
+      incremental: "0 6 * * *"
     name: "Inland Revenue Authority of Singapore"
     base_url: "https://www.iras.gov.sg"
     start_urls:
@@ -130,6 +139,9 @@ sources:
         eligibility: ["eligibility", "relief"]
 
   mas:
+    schedule:
+      full: "0 2 * * 0"
+      incremental: "0 6 * * *"
     name: "Monetary Authority of Singapore"
     base_url: "https://www.mas.gov.sg"
     start_urls:
@@ -169,6 +181,9 @@ sources:
         eligibility: ["eligibility", "criterion"]
 
   cpf:
+    schedule:
+      full: "0 2 * * 0"
+      incremental: "0 6 * * *"
     name: "CPF Board"
     base_url: "https://www.cpf.gov.sg"
     start_urls:

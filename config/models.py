@@ -59,6 +59,7 @@ class RawDocument(Base):
     error_message = Column(Text)  # Last error traceback if status="failed"
     needs_ocr = Column(Boolean, default=False, nullable=False)
     extraction_flags = Column(JSON, default=dict)
+    last_seen_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
     source = relationship("Source", back_populates="documents")
     chunks = relationship("ProcessedChunk", back_populates="document", cascade="all, delete-orphan")

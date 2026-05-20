@@ -243,6 +243,8 @@ class PostgresPipeline:
                     logger.info("page.updated", url=item["url"], source=item["source_code"], old_hash=old_hash[:12], new_hash=content_hash[:12])
                 else:
                     logger.info("page.unchanged", url=item["url"], source=item["source_code"], hash=content_hash[:12])
+                    existing.last_seen_at = func.now()  # Explicitly update liveness timestamp
+                    self.db.commit()
                     if self.stats:
                         self.stats.inc_value("pages_unchanged")
             else:

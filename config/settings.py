@@ -41,6 +41,12 @@ class Settings(BaseSettings):
     # Logging
     log_level: str = "INFO"
 
+    # Notifications
+    slack_webhook_url: str = ""
+
+    # Scheduling
+    celery_timezone: str = "Asia/Singapore"
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
 

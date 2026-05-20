@@ -132,20 +132,19 @@ def _parse_scrapy_settings(args: list[str]) -> tuple[dict, list[str]]:
     return scrapy_settings, remaining
 
 
-def main():
+def run_full_pipeline(
+    source_codes: list[str] | None = None,
+    job_type: str = "full",
+    crawl_only: bool = False,
+    process_only: bool = False,
+    embed_only: bool = False,
+    skip_embed: bool = False,
+    purge_vectors: bool = False,
+    scrapy_settings: dict | None = None,
+) -> None:
+    """Run the end-to-end pipeline programmatically."""
     run_id = str(uuid.uuid4())[:8]
     structlog.contextvars.bind_contextvars(run_id=run_id)
-
-    args = sys.argv[1:]
-
-    scrapy_settings, args = _parse_scrapy_settings(args)
-
-    crawl_only = "--crawl-only" in args
-    process_only = "--process-only" in args
-    embed_only = "--embed-only" in args
-    skip_embed = "--skip-embed" in args
-    purge_vectors = "--purge-vectors" in args
-    source_codes = [a for a in args if not a.startswith("--")] or None
 
     do_crawl = not process_only and not embed_only and not purge_vectors
     do_process = not crawl_only and not embed_only and not purge_vectors
@@ -154,6 +153,7 @@ def main():
     logger.info(
         "pipeline.started",
         sources=source_codes or "all",
+        job_type=job_type,
         crawl=do_crawl,
         process=do_process,
         embed=do_embed,
@@ -178,9 +178,11 @@ def main():
     if do_crawl:
         from crawlers.runner import run_crawlers
 
-        _banner("STAGE 1: CRAWL")
-        logger.info("stage.crawl_started", sources=source_codes or "all")
-        crawl_summary = run_crawlers(source_codes=source_codes, scrapy_settings=scrapy_settings)
+        _banner(f"STAGE 1: CRAWL ({job_type.upper()})")
+        logger.info("stage.crawl_started", sources=source_codes or "all", job_type=job_type)
+        crawl_summary = run_crawlers(
+            source_codes=source_codes, job_type=job_type, scrapy_settings=scrapy_settings
+        )
         logger.info("stage.crawl_done")
         _print_crawl_summary(crawl_summary)
 
@@ -223,6 +225,33 @@ def main():
         logger.info("stage.embed_done")
 
     logger.info("pipeline.done")
+
+
+def main():
+    args = sys.argv[1:]
+    scrapy_settings, args = _parse_scrapy_settings(args)
+
+    crawl_only = "--crawl-only" in args
+    process_only = "--process-only" in args
+    embed_only = "--embed-only" in args
+    skip_embed = "--skip-embed" in args
+    purge_vectors = "--purge-vectors" in args
+
+    # Default job type is full, but can be overridden
+    job_type = "incremental" if "--incremental" in args else "full"
+
+    source_codes = [a for a in args if not a.startswith("--")] or None
+
+    run_full_pipeline(
+        source_codes=source_codes,
+        job_type=job_type,
+        crawl_only=crawl_only,
+        process_only=process_only,
+        embed_only=embed_only,
+        skip_embed=skip_embed,
+        purge_vectors=purge_vectors,
+        scrapy_settings=scrapy_settings,
+    )
 
 
 if __name__ == "__main__":
