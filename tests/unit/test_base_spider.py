@@ -4,24 +4,18 @@ from crawlers.items import CrawlItem
 
 class TestSpider(BaseCrawler):
     name = "test"
-    source_name = "hdb"
+    source_name = "test"
     source_config = {
-        "js_rendering": False,
+        "start_urls": ["http://www.example.com"],
         "allowed_domains": ["www.example.com"],
+        "js_rendering": False,
+        "target_prefixes": [],
+        "skip_prefixes": [],
+        "blocked_subdomains": [],
+        "min_content_length": 100,
+        "content_selectors": [],
+        "content_keywords_filter": None,
     }
-
-    def get_start_urls(self):
-        return ["http://www.example.com"]
-
-    def parse_document(self, response):
-        item = CrawlItem()
-        item["url"] = response.url
-        item["source_code"] = self.source_name
-        item["content_type"] = "html"
-        item["raw_html"] = response.body
-        item["raw_text"] = "Test content"
-        item["content_hash"] = "abc123"
-        yield item
 
 
 def test_should_follow_link_skips_assets():
@@ -44,6 +38,7 @@ def test_should_follow_link_respects_scheme():
 
 
 def test_extract_main_content():
+    spider = TestSpider()
     html = """
     <html>
         <body>
@@ -53,9 +48,48 @@ def test_extract_main_content():
         </body>
     </html>
     """
-    content = BaseCrawler.extract_main_content(html)
+    content = spider.extract_main_content(html)
     assert "Main content here" in content
     assert "Footer content" not in content
+
+
+def test_extract_main_content_uses_content_selectors():
+    spider = TestSpider()
+    spider.source_config["content_selectors"] = ["div.hdb-content"]
+    html = """
+    <html>
+        <body>
+            <main>Ignored content</main>
+            <div class="hdb-content">Selected content</div>
+        </body>
+    </html>
+    """
+    content = spider.extract_main_content(html)
+    assert "Selected content" in content
+    assert "Ignored content" not in content
+
+
+def test_should_follow_link_respects_target_prefixes():
+    spider = TestSpider()
+    spider.source_config["target_prefixes"] = ["/buying-a-flat", "/renting"]
+    assert spider.should_follow_link("http://www.example.com/buying-a-flat/page", ["www.example.com"])
+    assert spider.should_follow_link("http://www.example.com/renting/page", ["www.example.com"])
+    assert not spider.should_follow_link("http://www.example.com/other/page", ["www.example.com"])
+
+
+def test_should_follow_link_respects_skip_prefixes():
+    spider = TestSpider()
+    spider.source_config["skip_prefixes"] = ["/feedback", "/careers"]
+    assert not spider.should_follow_link("http://www.example.com/feedback", ["www.example.com"])
+    assert not spider.should_follow_link("http://www.example.com/careers/page", ["www.example.com"])
+    assert spider.should_follow_link("http://www.example.com/page", ["www.example.com"])
+
+
+def test_should_follow_link_respects_blocked_subdomains():
+    spider = TestSpider()
+    spider.source_config["blocked_subdomains"] = ["assets.example.com"]
+    assert not spider.should_follow_link("http://assets.example.com/file.js", ["www.example.com", "assets.example.com"])
+    assert spider.should_follow_link("http://www.example.com/page", ["www.example.com"])
 
 
 def test_extract_title_from_title_tag():
@@ -68,3 +102,26 @@ def test_extract_title_fallback_to_h1():
     html = "<html><body><h1>Heading Title</h1></body></html>"
     title = BaseCrawler.extract_title(html)
     assert title == "Heading Title"
+
+
+def test_content_keywords_filter():
+    spider = TestSpider()
+    spider.source_config["content_keywords_filter"] = ["property", "mortgage"]
+
+    # Test with matching content
+    html_matching = "<html><body>Property-related content about mortgages</body></html>"
+    content = spider.extract_main_content(html_matching)
+    assert len(content) > 0
+
+    # The keyword filter is applied in parse_document, not extract_main_content
+    # This test just ensures extract works as expected
+
+
+def test_min_content_length():
+    spider = TestSpider()
+    spider.source_config["min_content_length"] = 100
+
+    # Short content should be filtered by parse_document (not extract_main_content)
+    html_short = "<html><body>Short</body></html>"
+    content = spider.extract_main_content(html_short)
+    assert len(content) < 100

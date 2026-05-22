@@ -18,16 +18,25 @@ SPIDER_MAP = {
     "mas": "mas",
     "cpf": "cpf",
 }
+CUSTOM_SPIDER_CODES = set(SPIDER_MAP.keys())
 
 
 def run_crawlers(source_codes: list[str] | None = None, job_type: str = "full", scrapy_settings: dict | None = None) -> list[dict]:
-    codes = source_codes or list(SPIDER_MAP.keys())
+    # If no codes provided, run all custom spiders + generic spider (discovers non-custom sources)
+    if source_codes is None:
+        codes = list(SPIDER_MAP.keys())
+        run_generic = True
+    else:
+        codes = source_codes
+        run_generic = False
+
     settings = get_project_settings()
     if scrapy_settings:
         settings.update(scrapy_settings)
     process = CrawlerProcess(settings)
     db = SessionLocal()
     job_map: dict[str, uuid.UUID] = {}
+    generic_job_id: uuid.UUID | None = None
     summary: list[dict] = []
 
     # Capture stats via spider_closed signal — process.crawlers is empty after start() returns
@@ -60,6 +69,11 @@ def run_crawlers(source_codes: list[str] | None = None, job_type: str = "full", 
             job_map[SPIDER_MAP[code]] = job.id
 
             process.crawl(SPIDER_MAP[code])
+
+        # If running all sources, also run generic spider to cover any non-custom sources
+        if run_generic:
+            logger.info("crawl.generic_spider_enabled")
+            process.crawl("generic")
 
         # Connect signal to every crawler before start() — crawlers are still in the set here
         for crawler in process.crawlers:

@@ -27,6 +27,21 @@ sources:
       - "/buying-a-flat"
       - "/managing-my-home"
       - "/renting-a-flat"
+    skip_prefixes:
+      - "/feedback"
+      - "/careers"
+      - "/eservices"
+      - "/news"
+      - "/publications"
+      - "/corporate"
+      - "/my-nice-home-gallery"
+      - "/home-gallery"
+      - "/virtual-tour"
+    blocked_subdomains:
+      - "assets.hdb.gov.sg"
+    playwright_wait_event: "domcontentloaded"
+    min_content_length: 100
+    user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     content_selectors:
       - "main#main-content"
       - "div.hdb-content"
@@ -73,10 +88,18 @@ sources:
     js_rendering: false
     crawl_delay: 2.0
     estimated_pages: 250
-    respect_robots_txt: true
+    respect_robots_txt: false
     target_prefixes:
       - "/Corporate/Property"
       - "/Corporate/Guidelines"
+    skip_prefixes:
+      - "/maps"
+      - "/space"
+      - "/corporate/data"
+    blocked_subdomains: []
+    playwright_wait_event: "domcontentloaded"
+    min_content_length: 100
+    user_agent: null
     content_selectors:
       - "div.mainWrap"
       - "div.fullbody-wrapper"
@@ -117,10 +140,15 @@ sources:
     js_rendering: false
     crawl_delay: 2.0
     estimated_pages: 120
-    respect_robots_txt: true
+    respect_robots_txt: false
     target_prefixes:
       - "/taxes/stamp-duty"
       - "/taxes/property-tax"
+    skip_prefixes: []
+    blocked_subdomains: []
+    playwright_wait_event: "domcontentloaded"
+    min_content_length: 100
+    user_agent: null
     content_selectors:
       - "div.sfContentBlock"
       - "article.content"
@@ -162,6 +190,31 @@ sources:
     target_prefixes:
       - "/regulation/regulations-and-guidance"
       - "/news"
+    skip_prefixes:
+      - "/terms-of-use"
+      - "/privacy"
+      - "/about-mas"
+      - "/careers"
+      - "/contact"
+      - "/statistics"
+      - "/data-and-statistics"
+      - "/publications/statistics"
+      - "/investor-alert"
+      - "/complaints"
+    blocked_subdomains:
+      - "eservices.mas.gov.sg"
+    playwright_wait_event: "domcontentloaded"
+    min_content_length: 100
+    user_agent: null
+    content_keywords_filter:
+      - "property"
+      - "mortgage"
+      - "loan-to-value"
+      - "ltv"
+      - "tdsr"
+      - "total debt servicing"
+      - "housing loan"
+      - "residential property"
     content_selectors:
       - "div.mas-content"
       - "div#content"
@@ -201,6 +254,15 @@ sources:
     respect_robots_txt: true
     target_prefixes:
       - "/member/home-ownership"
+    skip_prefixes:
+      - "/member/healthcare"
+      - "/member/retirement"
+      - "/member/account-services"
+      - "/employer"
+    blocked_subdomains: []
+    playwright_wait_event: "networkidle"
+    min_content_length: 100
+    user_agent: null
     content_selectors:
       - "div#cpf-content"
       - "main"

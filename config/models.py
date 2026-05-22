@@ -16,7 +16,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import JSON, UUID
+from sqlalchemy.dialects.postgresql import JSON, JSONB, UUID
 from sqlalchemy.orm import relationship
 
 from config.database import Base
@@ -31,7 +31,7 @@ class Source(Base):
     name = Column(String(100), nullable=False, unique=True)
     code = Column(String(20), nullable=False, unique=True)  # hdb, ura, iras, mas, cpf
     base_url = Column(String(500), nullable=False)
-    crawl_config = Column(JSON, default=dict)
+    crawl_config = Column(JSONB, default=dict)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
