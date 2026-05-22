@@ -1,0 +1,12 @@
+{
+  "name": "sg-property-agent-tunnel",
+  "version": "1.0.0",
+  "description": "LocalTunnel helper for exposing sg-property-agent backend to Meta WhatsApp webhooks",
+  "main": "tunnel.js",
+  "scripts": {
+    "tunnel": "node tunnel.js"
+  },
+  "dependencies": {
+    "localtunnel": "^2.0.2"
+  }
+}

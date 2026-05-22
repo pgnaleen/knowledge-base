@@ -1,6 +1,28 @@
-import { useState, useRef, useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
+import "./App.css";
 
-const API = "http://localhost:8001";
+const API = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
+
+const STARTER_PROMPTS = [
+  {
+    title: "First-time PR Condo",
+    text: "What is ABSD for a PR buying first condo?",
+  },
+  {
+    title: "HDB Eligibility",
+    text: "Can a PR couple buy an HDB flat and what are the conditions?",
+  },
+  {
+    title: "Duty Estimate",
+    text: "Estimate stamp duties for a 1.2M residential purchase.",
+  },
+  {
+    title: "Timeline Risk",
+    text: "If I sell within 2 years, how does SSD apply?",
+  },
+];
+
+const MARKET_PILLS = ["ABSD", "HDB Rules", "BSD/SSD", "PR/Foreigner", "Condo/HDB"];
 
 export default function App() {
   const [messages, setMessages] = useState([]);
@@ -10,32 +32,83 @@ export default function App() {
 
   useEffect(() => {
     bottom.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [messages, loading]);
 
-  async function send() {
-    const question = input.trim();
+  async function send(customQuestion) {
+    const question = (customQuestion ?? input).trim();
     if (!question || loading) return;
 
     setInput("");
     setMessages((prev) => [...prev, { role: "user", text: question }]);
     setLoading(true);
 
+    // Insert placeholder agent message — updated in-place as the stream arrives
+    setMessages((prev) => [...prev, { role: "agent", text: "", status: "Connecting..." }]);
+
     try {
-      const res = await fetch(`${API}/chat`, {
+      const res = await fetch(`${API}/chat/stream`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ question }),
+        credentials: "include",
       });
-      const data = await res.json();
-      setMessages((prev) => [...prev, { role: "agent", text: data.answer }]);
+
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop(); // keep incomplete trailing line
+
+        for (const part of parts) {
+          const line = part.trim();
+          if (!line.startsWith("data: ")) continue;
+          let event;
+          try { event = JSON.parse(line.slice(6)); } catch { continue; }
+
+          if (event.type === "status") {
+            setMessages((prev) => {
+              const u = [...prev];
+              u[u.length - 1] = { ...u[u.length - 1], status: event.text };
+              return u;
+            });
+          } else if (event.type === "token") {
+            setMessages((prev) => {
+              const u = [...prev];
+              const last = u[u.length - 1];
+              u[u.length - 1] = { ...last, text: last.text + event.content, status: null };
+              return u;
+            });
+          } else if (event.type === "done" || event.type === "error") {
+            setMessages((prev) => {
+              const u = [...prev];
+              u[u.length - 1] = {
+                ...u[u.length - 1],
+                ...(event.type === "error" ? { text: event.text } : {}),
+                status: null,
+              };
+              return u;
+            });
+          }
+        }
+      }
     } catch {
-      setMessages((prev) => [
-        ...prev,
-        {
+      setMessages((prev) => {
+        const u = [...prev];
+        u[u.length - 1] = {
           role: "agent",
-          text: "Error: could not reach the agent server. Is the backend running on port 8001?",
-        },
-      ]);
+          text: "Could not reach backend on port 8001. Please start sg-property-agent backend and try again.",
+          status: null,
+        };
+        return u;
+      });
     } finally {
       setLoading(false);
     }
@@ -43,7 +116,10 @@ export default function App() {
 
   async function reset() {
     try {
-      await fetch(`${API}/reset`, { method: "POST" });
+      await fetch(`${API}/reset`, {
+        method: "POST",
+        credentials: "include",
+      });
       setMessages([]);
     } catch {
       alert("Could not reset conversation");
@@ -51,139 +127,88 @@ export default function App() {
   }
 
   return (
-    <div
-      style={{
-        maxWidth: 720,
-        margin: "40px auto",
-        fontFamily: "sans-serif",
-        padding: "0 16px",
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          marginBottom: 16,
-        }}
-      >
-        <h2 style={{ margin: 0 }}>🏠 SG Property Agent</h2>
-        <button
-          onClick={reset}
-          style={{
-            padding: "6px 14px",
-            cursor: "pointer",
-            borderRadius: 4,
-            border: "1px solid #ccc",
-            background: "#fff",
-          }}
-        >
-          Reset
-        </button>
-      </div>
+    <div className="app-shell">
+      <aside className="sidebar">
+        <div className="sidebar-brand">
+          <p className="brand-kicker">SG PROPERTY</p>
+          <h1>Policy Copilot</h1>
+          <p>Grounded answers for ABSD, HDB eligibility, BSD/SSD, and buying decisions.</p>
+        </div>
 
-      <div
-        style={{
-          border: "1px solid #ddd",
-          borderRadius: 8,
-          padding: 16,
-          height: 500,
-          overflowY: "auto",
-          marginBottom: 12,
-        }}
-      >
-        {messages.length === 0 && (
-          <p
-            style={{
-              color: "#999",
-              textAlign: "center",
-              marginTop: 200,
-              fontSize: 14,
-            }}
-          >
-            Ask a question about Singapore property rules...
-            <br />
-            <span style={{ fontSize: 12 }}>
-              e.g., "What is ABSD for PR buying a condo?"
-            </span>
-          </p>
-        )}
-        {messages.map((m, i) => (
-          <div
-            key={i}
-            style={{
-              textAlign: m.role === "user" ? "right" : "left",
-              marginBottom: 12,
-            }}
-          >
-            <span
-              style={{
-                display: "inline-block",
-                maxWidth: "85%",
-                padding: "10px 14px",
-                borderRadius: 12,
-                background: m.role === "user" ? "#0070f3" : "#f1f1f1",
-                color: m.role === "user" ? "#fff" : "#000",
-                whiteSpace: "pre-wrap",
-                textAlign: "left",
-                fontSize: 14,
-                lineHeight: 1.5,
-              }}
-            >
-              {m.text}
-            </span>
-          </div>
-        ))}
-        {loading && (
-          <div style={{ textAlign: "left", marginBottom: 12 }}>
-            <span
-              style={{
-                display: "inline-block",
-                padding: "10px 14px",
-                borderRadius: 12,
-                background: "#f1f1f1",
-                fontSize: 14,
-              }}
-            >
-              ⏳ Thinking...
-            </span>
-          </div>
-        )}
-        <div ref={bottom} />
-      </div>
-
-      <div style={{ display: "flex", gap: 8 }}>
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && send()}
-          placeholder="Ask about ABSD, HDB eligibility, stamp duty..."
-          style={{
-            flex: 1,
-            padding: "10px 14px",
-            borderRadius: 8,
-            border: "1px solid #ddd",
-            fontSize: 14,
-          }}
-          disabled={loading}
-        />
-        <button
-          onClick={send}
-          disabled={loading || !input.trim()}
-          style={{
-            padding: "10px 20px",
-            borderRadius: 8,
-            cursor: loading || !input.trim() ? "not-allowed" : "pointer",
-            background: loading || !input.trim() ? "#f0f0f0" : "#0070f3",
-            color: loading || !input.trim() ? "#999" : "#fff",
-            border: "none",
-            fontSize: 14,
-            fontWeight: 500,
-          }}
-        >
-          Send
+        <button className="reset-btn" onClick={reset}>
+          New Chat
         </button>
-      </div>
+
+        <div className="pill-wrap">
+          {MARKET_PILLS.map((pill) => (
+            <span key={pill} className="pill">
+              {pill}
+            </span>
+          ))}
+        </div>
+
+        <div className="metric-card">
+          <p className="metric-title">Session</p>
+          <p>Questions: {messages.filter((m) => m.role === "user").length}</p>
+          <p>Answers: {messages.filter((m) => m.role === "agent").length}</p>
+        </div>
+      </aside>
+
+      <section className="chat-shell">
+        <header className="chat-header">
+          <h2>Property Policy Assistant</h2>
+          <span className="status">Live KB</span>
+        </header>
+
+        <div className="chat-panel">
+          {messages.length === 0 ? (
+            <div className="empty-state">
+              <h3>How can I help with your property question?</h3>
+              <div className="scenario-grid">
+                {STARTER_PROMPTS.map((prompt) => (
+                  <button
+                    key={prompt.title}
+                    className="scenario-card"
+                    onClick={() => send(prompt.text)}
+                    disabled={loading}
+                  >
+                    <strong>{prompt.title}</strong>
+                    <span>{prompt.text}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="messages">
+              {messages.map((m, i) => (
+                <article key={i} className={`message-row ${m.role}`}>
+                  <div className="avatar">{m.role === "user" ? "You" : "AI"}</div>
+                  <div className="message-bubble">
+                    {m.status && <span className="stream-status">{m.status}</span>}
+                    {m.text}
+                  </div>
+                </article>
+              ))}
+              <div ref={bottom} />
+            </div>
+          )}
+        </div>
+
+        <footer className="composer-wrap">
+          <div className="composer">
+            <input
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && send()}
+              placeholder="Message SG Property Copilot..."
+              disabled={loading}
+            />
+            <button onClick={() => send()} disabled={loading || !input.trim()}>
+              Send
+            </button>
+          </div>
+        </footer>
+      </section>
     </div>
   );
 }

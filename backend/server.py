@@ -21,15 +21,18 @@ from schemas import (
     SSDRequest,
     SSDResponse,
 )
-from session import SessionStore
 from tools.stamp_duty import BuyerProfile, PropertyType, calculate_ssd, calculate_stamp_duty
+import json
+from fastapi.responses import StreamingResponse
+from graph import run as graph_run, reset as graph_reset, stream as graph_stream
+from channels.whatsapp.router import create_whatsapp_router
 
 load_dotenv()
 setup_logging()  # Initialize structured logging
 
 log = get_logger(__name__)
 
-app = FastAPI(title="SG Property Agent", version="1.0.0")
+app = FastAPI(title="SG Property Agent", version="1.0.0", redirect_slashes=False)
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -58,14 +61,9 @@ app.add_middleware(
     allow_credentials=True,
 )
 
-# Session store: manages per-user PropertyAgent instances
-_sessions = SessionStore(max_sessions=500, ttl_seconds=1800)
-
-
-class ChatRequest(BaseModel):
-    """POST /chat request."""
-
-    question: str = Field(..., min_length=1, max_length=2000)
+# Mount WhatsApp webhook channel
+_whatsapp_router = create_whatsapp_router()
+app.include_router(_whatsapp_router, prefix="/webhook/whatsapp", tags=["whatsapp"])
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -85,19 +83,9 @@ async def health_ready() -> ReadyResponse:
 async def chat(
     req: ChatRequest, response: Response, session_id: str = Cookie(default=None)
 ) -> ChatResponse:
-    """Answer a property question with session isolation."""
-    # Create or reuse session
+    """Answer a property question, maintaining conversation history per session."""
     sid = session_id or str(uuid.uuid4())
-    agent = _sessions.get_or_create(
-        sid,
-        kb_url=os.environ["KB_PIPELINE_URL"],
-        openai_api_key=os.environ["OPENAI_API_KEY"],
-    )
-
-    # Chat (now async)
-    answer = await agent.chat(req.question)
-
-    # Set session cookie (httponly, 30-minute TTL)
+    answer = await graph_run(thread_id=sid, question=req.question)
     response.set_cookie(
         "session_id",
         sid,
@@ -109,11 +97,39 @@ async def chat(
     return ChatResponse(answer=answer)
 
 
+@app.post("/chat/stream")
+async def chat_stream(
+    req: ChatRequest, response: Response, session_id: str = Cookie(default=None)
+):
+    """Stream graph execution as Server-Sent Events for the web frontend."""
+    sid = session_id or str(uuid.uuid4())
+
+    async def event_generator():
+        try:
+            async for event_dict in graph_stream(thread_id=sid, question=req.question):
+                yield f"data: {json.dumps(event_dict)}\n\n"
+        except Exception as exc:
+            log.error("chat_stream_error", session_id=sid, error=str(exc))
+            yield f"data: {json.dumps({'type': 'error', 'text': 'Stream error. Please try again.'})}\n\n"
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+    streaming_response = StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+    streaming_response.set_cookie(
+        "session_id", sid, httponly=True, samesite="lax", max_age=1800, path="/"
+    )
+    return streaming_response
+
+
 @app.post("/reset", response_model=ResetResponse)
-async def reset(response: Response, session_id: str = Cookie(default=None)) -> ResetResponse:
-    """Reset conversation history for the current session."""
+async def reset_chat(response: Response, session_id: str = Cookie(default=None)) -> ResetResponse:
+    """Clear conversation history for the current session."""
     if session_id:
-        _sessions.reset(session_id)
+        graph_reset(session_id)
+    response.delete_cookie("session_id")
     return ResetResponse(status="ok")
 
 
@@ -182,7 +198,12 @@ async def startup_event():
     """Log startup."""
     log.info(
         "server_startup",
-        openai_model=os.environ.get("OPENAI_MODEL", "gpt-4o"),
+        llm_provider=os.environ.get("LLM_PROVIDER", "openai"),
+        llm_model=(
+            os.environ.get("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct:free")
+            if os.environ.get("LLM_PROVIDER", "openai").lower() == "openrouter"
+            else os.environ.get("OPENAI_MODEL", "gpt-4o")
+        ),
         kb_url=os.environ.get("KB_PIPELINE_URL"),
         cors_origins=os.environ.get("CORS_ORIGINS", "http://localhost:5173"),
     )

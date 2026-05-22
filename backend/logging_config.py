@@ -4,6 +4,7 @@ In development: pretty console output with colors.
 In production: JSON lines for easy parsing by log aggregators (Datadog, ELK, etc).
 """
 
+import logging
 import os
 import sys
 
@@ -16,6 +17,9 @@ IS_PRODUCTION = ENV == "production"
 
 def setup_logging() -> None:
     """Configure structlog for structured logging."""
+    # Allow INFO level through structlog's filter_by_level processor
+    logging.basicConfig(level=logging.INFO)
+    logging.getLogger().setLevel(logging.INFO)
 
     if IS_PRODUCTION:
         # JSON output for production (machine-readable)

@@ -6,5 +6,12 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: false,
+    proxy: {
+      '/chat': 'http://localhost:8001',
+      '/reset': 'http://localhost:8001',
+      '/health': 'http://localhost:8001',
+      '/calculate': 'http://localhost:8001',
+      '/webhook': 'http://localhost:8001',
+    },
   },
 })
