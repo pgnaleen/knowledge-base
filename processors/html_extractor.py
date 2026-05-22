@@ -39,14 +39,6 @@ _NOISE_CLASS_PATTERNS = [
     "advert",
 ]
 
-_SOURCE_SELECTORS: dict[str, list[str]] = {
-    "hdb": ["main#main-content", "div.hdb-content", "main", "article"],
-    "ura": ["div.mainWrap", "div.fullbody-wrapper", "div.text-cms-col", "main", "article"],
-    "iras": ["div.sfContentBlock", "article.content", "main", "article"],
-    "mas": ["div.mas-content", "div#content", "main", "article"],
-    "cpf": ["div#cpf-content", "main", "article"],
-}
-
 _GENERIC_SELECTORS = ["main", "article", "div[role='main']"]
 _HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
 
@@ -67,9 +59,12 @@ class HTMLExtractor:
         html: str | bytes,
         source_url: str = "",
         source_name: str = "",
+        content_selectors: list[str] | None = None,
     ) -> ExtractedDocument:
         if not html:
             raise ExtractionError("html input is empty")
+
+        logger.info("html.started", source_url=source_url, source_name=source_name)
 
         warnings: list[str] = []
 
@@ -80,7 +75,7 @@ class HTMLExtractor:
 
         title = self._extract_title(soup)
         self._remove_noise(soup)
-        content_node = self._find_content_node(soup, source_name)
+        content_node = self._find_content_node(soup, content_selectors)
         text, headings = self._extract_text_and_headings(content_node)
         tables = _table_extractor.extract_from_html(content_node)
 
@@ -101,8 +96,8 @@ class HTMLExtractor:
 
         word_count = len(text.split()) if text.strip() else 0
 
-        logger.debug(
-            "html_extractor.extracted",
+        logger.info(
+            "html.extracted",
             source_url=source_url,
             source_name=source_name,
             word_count=word_count,
@@ -157,8 +152,8 @@ class HTMLExtractor:
         combined = f"{classes} {tag_id} {role}"
         return any(pattern in combined for pattern in _NOISE_CLASS_PATTERNS)
 
-    def _find_content_node(self, soup: BeautifulSoup, source_name: str) -> Any:
-        selectors = _SOURCE_SELECTORS.get(source_name.lower(), []) + _GENERIC_SELECTORS
+    def _find_content_node(self, soup: BeautifulSoup, content_selectors: list[str] | None = None) -> Any:
+        selectors = (content_selectors or []) + _GENERIC_SELECTORS
         for selector in selectors:
             node = soup.select_one(selector)
             if node:

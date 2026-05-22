@@ -1,5 +1,6 @@
 """Document chunking — splits ExtractedDocument into embeddable DocumentChunk objects."""
 
+import tiktoken
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from config.logger import get_logger
@@ -10,6 +11,7 @@ logger = get_logger("chunker")
 
 _DEFAULT_CHUNK_SIZE = 512
 _DEFAULT_CHUNK_OVERLAP = 64
+_enc = tiktoken.get_encoding("cl100k_base")
 
 
 class DocumentChunker:
@@ -31,6 +33,7 @@ class DocumentChunker:
             encoding_name="cl100k_base",
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
+            separators=["\n\n", "\n", " "],
         )
 
     def chunk(
@@ -38,6 +41,14 @@ class DocumentChunker:
         doc: ExtractedDocument,
         metadata: ExtractedMetadata,
     ) -> list[DocumentChunk]:
+        logger.info(
+            "chunker.started",
+            source_url=doc.source_url,
+            source_name=doc.source_name,
+            content_type=doc.content_type,
+            word_count=doc.word_count,
+        )
+
         chunks: list[DocumentChunk] = []
         base_meta = metadata.to_dict()
         counter = 0
@@ -59,6 +70,7 @@ class DocumentChunker:
                         source_name=doc.source_name,
                         content_type=doc.content_type,
                         word_count=len(piece.split()),
+                        token_count=len(_enc.encode(piece)),
                     )
                 )
                 counter += 1
@@ -85,12 +97,13 @@ class DocumentChunker:
                     source_name=doc.source_name,
                     content_type=doc.content_type,
                     word_count=len(md.split()),
+                    token_count=len(_enc.encode(md)),
                 )
             )
             counter += 1
 
-        logger.debug(
-            "chunker.chunked",
+        logger.info(
+            "chunker.done",
             source_url=doc.source_url,
             source_name=doc.source_name,
             text_chunks=sum(1 for c in chunks if c.chunk_type == "text"),

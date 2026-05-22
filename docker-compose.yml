@@ -1,27 +1,109 @@
-version: "3.9"
+name: kb-pipeline
 
 services:
-  postgres:
-    image: pgvector/pgvector:pg16
-    container_name: kb-postgres
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: KB-Pipeline-App
+    volumes:
+      - .:/app
+    working_dir: /app
     environment:
-      POSTGRES_DB: knowledge_base
+      PYTHONPATH: /app
+      TZ: Asia/Colombo
+      DATABASE_URL: postgresql://kb_user:kb_pass@postgres:5432/kb_pipeline_db
+      REDIS_URL: redis://redis:6379/0
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin
+      S3_REGION: us-east-1
+      S3_BUCKET: sg-property-kb
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    command: ["tail", "-f", "/dev/null"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import config.settings; print('ok')"]
+      interval: 1m30s
+      timeout: 30s
+      retries: 5
+      start_period: 30s
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: KB-Pipeline-API
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+    working_dir: /app
+    environment:
+      PYTHONPATH: /app
+      TZ: Asia/Colombo
+      DATABASE_URL: postgresql://kb_user:kb_pass@postgres:5432/kb_pipeline_db
+      REDIS_URL: redis://redis:6379/0
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin
+      S3_REGION: us-east-1
+      S3_BUCKET: sg-property-kb
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    command: ["uvicorn", "api.app:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  postgres:
+    image: pgvector/pgvector:0.8.0-pg16
+    container_name: KB-Pipeline-Postgres
+    environment:
       POSTGRES_USER: kb_user
       POSTGRES_PASSWORD: kb_pass
+      POSTGRES_DB: kb_pipeline_db
+      TZ: Asia/Colombo
+      PGTZ: Asia/Colombo
     ports:
-      - "5433:5432"
+      - "5432:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kb_user -d kb_pipeline_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
 
   redis:
     image: redis:7-alpine
-    container_name: kb-redis
+    container_name: KB-Pipeline-Redis
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   minio:
     image: minio/minio:latest
-    container_name: kb-minio
+    container_name: KB-Pipeline-Minio
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
@@ -31,45 +113,82 @@ services:
     volumes:
       - minio-data:/data
     command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]  
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   minio-init:
     image: minio/mc:latest
-    container_name: kb-minio-init
+    container_name: KB-Pipeline-Minio-Init
     depends_on:
-      - minio
+      minio:
+        condition: service_healthy
     entrypoint: >
       /bin/sh -c "
       sleep 3;
       mc alias set local http://minio:9000 minioadmin minioadmin;
-      mc mb local/knowledge-base --ignore-existing;
+      mc mb local/sg-property-kb --ignore-existing;
       exit 0;
       "
 
-  # Optional Python app container. Start with: docker compose --profile app up app
-  app:
-    profiles:
-      - app
+  worker:
     build:
       context: .
       dockerfile: Dockerfile.dev
-    container_name: kb-app
+    container_name: KB-Pipeline-Worker
     volumes:
-      - .:/workspace
-    working_dir: /workspace
+      - .:/app
+    working_dir: /app
     environment:
-      DATABASE_URL: postgresql://kb_user:kb_pass@postgres:5432/knowledge_base
+      PYTHONPATH: /app
+      TZ: Asia/Singapore
+      DATABASE_URL: postgresql://kb_user:kb_pass@postgres:5432/kb_pipeline_db
       REDIS_URL: redis://redis:6379/0
       S3_ENDPOINT: http://minio:9000
       S3_ACCESS_KEY: minioadmin
       S3_SECRET_KEY: minioadmin
-      S3_BUCKET: knowledge-base
       S3_REGION: us-east-1
+      S3_BUCKET: sg-property-kb
     depends_on:
-      - postgres
-      - redis
-      - minio
-    command: ["tail", "-f", "/dev/null"]
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    command: ["celery", "-A", "config.celery_app", "worker", "--loglevel=info"]
+
+  beat:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: KB-Pipeline-Beat
+    volumes:
+      - .:/app
+    working_dir: /app
+    environment:
+      PYTHONPATH: /app
+      TZ: Asia/Singapore
+      DATABASE_URL: postgresql://kb_user:kb_pass@postgres:5432/kb_pipeline_db
+      REDIS_URL: redis://redis:6379/0
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin
+      S3_REGION: us-east-1
+      S3_BUCKET: sg-property-kb
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    command: ["celery", "-A", "config.celery_app", "beat", "--loglevel=info"]
+
 
 volumes:
-  pgdata:
+  postgres_data:
   minio-data:

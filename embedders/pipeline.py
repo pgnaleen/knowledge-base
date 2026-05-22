@@ -1,65 +1,45 @@
-"""Embedding pipeline — processes raw docs into chunks and embeds them."""
+"""Embedding pipeline — embeds processed_chunks and upserts to vector stores."""
 
-import hashlib
 import json
-import uuid
 from datetime import date
+
+import openai
 
 import tiktoken
 from sqlalchemy import text
+from sqlalchemy.orm import Session
 
-from config.database import engine
+from config.database import SessionLocal, engine
 from config.logger import get_logger
-from config.storage import upload_embeddings, upload_processed_text
+from config.models import ProcessedChunk, RawDocument
+from config.storage import upload_embeddings
 from embedders.embedding_service import EmbeddingService
 from embedders.pgvector_store import PgVectorStore
 from embedders.pinecone_store import PineconeStore
-from processors import (
-    ChunkValidator,
-    DocumentChunker,
-    ExtractionError,
-    HTMLExtractor,
-    MetadataExtractor,
-)
-from processors.models import DocumentChunk, ExtractedDocument
+from processors.models import DocumentChunk
 
 logger = get_logger("embedding_pipeline")
 _TIKTOKEN = tiktoken.get_encoding("cl100k_base")
 
-# Fetch raw_documents that have no processed_chunks rows yet.
-# Adapted to my schema: document_id (UUID), s.code as source identifier.
-_UNPROCESSED_DOCS_SQL = """
-    SELECT rd.id, rd.url, rd.raw_html, rd.raw_text, s.code AS source_code
-    FROM raw_documents rd
-    JOIN sources s ON rd.source_id = s.id
-    WHERE NOT EXISTS (
-        SELECT 1 FROM processed_chunks pc WHERE pc.document_id = rd.id
-    )
-    AND (rd.raw_html IS NOT NULL OR rd.raw_text IS NOT NULL)
-    {source_filter}
-"""
-
 # Fetch processed_chunks not yet embedded.
 _UNEMBEDDED_CHUNKS_SQL = """
-    SELECT pc.id, pc.chunk_text, pc.chunk_index, pc.heading_path,
-           pc.metadata_json, rd.url AS source_url, s.code AS source_code
+    SELECT pc.id, pc.chunk_text, pc.chunk_index, pc.token_count,
+           pc.metadata_json, rd.url AS source_url, rd.content_type, s.code AS source_code
     FROM processed_chunks pc
     JOIN raw_documents rd ON pc.document_id = rd.id
     JOIN sources s ON rd.source_id = s.id
     WHERE pc.embedding_id IS NULL
+      AND rd.status != 'deleted'
     {source_filter}
     ORDER BY pc.id
 """
 
 
 class EmbeddingPipeline:
-    """End-to-end pipeline: raw_documents -> processed_chunks -> vector store.
+    """Embeds processed_chunks and upserts to Pinecone (primary) and pgvector (fallback).
 
-    Two independent steps that can be run together or separately:
-      1. process_documents — extract/chunk/validate raw HTML and PDF text,
-         save valid chunks to processed_chunks (incremental: skips already-chunked docs).
-      2. embed_chunks — read unembedded processed_chunks, call OpenAI, upsert to
-         Pinecone (or pgvector fallback), and update processed_chunks.embedding_id.
+    Reads unembedded rows from processed_chunks, calls OpenAI, writes vectors to
+    Pinecone namespaces and pgvector, then updates embedding_id in the DB.
     """
 
     def __init__(
@@ -84,65 +64,8 @@ class EmbeddingPipeline:
                 self._pinecone_store = None
         self._pgvector_store = PgVectorStore()
 
-    def run(self, source_code: str | None = None) -> dict:
-        """Run both pipeline steps and return a stats dict."""
-        docs_processed, chunks_saved = self.process_documents(source_code)
-        chunks_embedded = self.embed_chunks(source_code)
-        stats = {
-            "docs_processed": docs_processed,
-            "chunks_saved": chunks_saved,
-            "chunks_embedded": chunks_embedded,
-        }
-        logger.info("pipeline.run_complete", source_code=source_code or "all", **stats)
-        return stats
-
-    def process_documents(self, source_code: str | None = None) -> tuple[int, int]:
-        """Step 1 — extract and chunk unprocessed raw_documents."""
-        source_filter, params = _source_filter(source_code)
-        sql = _UNPROCESSED_DOCS_SQL.format(source_filter=source_filter)
-
-        with self._engine.connect() as conn:
-            rows = conn.execute(text(sql), params).fetchall()
-
-        docs_processed = 0
-        chunks_saved = 0
-
-        for row in rows:
-            doc_id, url, raw_html, raw_text, src_code = row
-            try:
-                saved = self._process_one_document(
-                    doc_id, url, raw_html, raw_text, src_code
-                )
-                chunks_saved += saved
-                docs_processed += 1
-            except Exception as exc:
-                logger.error(
-                    "pipeline.doc_failed",
-                    doc_id=str(doc_id),
-                    url=url,
-                    error=str(exc),
-                )
-
-        # Mark documents as processed
-        with self._engine.begin() as conn:
-            conn.execute(
-                text(
-                    "UPDATE raw_documents SET status = 'processed' "
-                    "WHERE id IN (SELECT DISTINCT document_id FROM processed_chunks "
-                    "WHERE created_at >= NOW() - INTERVAL '1 hour')"
-                )
-            )
-
-        logger.info(
-            "pipeline.process_documents_done",
-            source_code=source_code or "all",
-            docs_processed=docs_processed,
-            chunks_saved=chunks_saved,
-        )
-        return docs_processed, chunks_saved
-
     def embed_chunks(self, source_code: str | None = None) -> int:
-        """Step 2 — embed unembedded processed_chunks and upsert to vector store."""
+        """Embed unembedded processed_chunks and upsert to vector store."""
         source_filter, params = _source_filter(source_code)
         sql = _UNEMBEDDED_CHUNKS_SQL.format(source_filter=source_filter)
 
@@ -157,36 +80,62 @@ class EmbeddingPipeline:
         chunks: list[DocumentChunk] = []
 
         for row in rows:
-            chunk_id, chunk_text_val, chunk_index, heading_path, metadata_json, source_url, src_code = row
+            (
+                chunk_id,
+                chunk_text_val,
+                chunk_index,
+                token_count,
+                metadata_json,
+                source_url,
+                content_type,
+                src_code,
+            ) = row
             db_ids.append(chunk_id)
-            try:
-                hp = json.loads(heading_path) if heading_path else []
-            except (TypeError, json.JSONDecodeError):
-                hp = []
             chunks.append(
                 DocumentChunk(
                     chunk_text=chunk_text_val,
                     chunk_index=chunk_index,
                     chunk_type=(metadata_json or {}).get("chunk_type", "text"),
-                    heading_path=hp,
+                    heading_path=(metadata_json or {}).get("heading_path", []),
                     metadata=metadata_json or {},
                     source_url=source_url or "",
                     source_name=src_code,
-                    content_type="html",
+                    content_type=content_type or "html",
                     word_count=len(chunk_text_val.split()),
+                    token_count=token_count or 0,
                 )
             )
 
-        results = self._embedding_service.embed_chunks(chunks)
+        logger.info("embed.started", source=source_code or "all", chunks=len(chunks))
+
+        try:
+            results = self._embedding_service.embed_chunks(chunks)
+        except openai.AuthenticationError as exc:
+            logger.error(
+                "pipeline.openai_auth_failed",
+                error=str(exc),
+                hint="Check that OPENAI_API_KEY is set and not expired. Chunks remain unembedded and will be retried on next run.",
+            )
+            return 0
 
         id_map: dict = {}
+        store_used = "pgvector"
         if self._pinecone_store is not None:
             try:
+                logger.info("pinecone.storing", source=source_code or "all", chunks=len(results))
                 id_map = self._pinecone_store.upsert(results, db_ids)
+                store_used = "pinecone"
             except Exception as exc:
                 logger.warning("pipeline.pinecone_upsert_failed", error=str(exc))
+                logger.info(
+                    "pgvector.storing",
+                    source=source_code or "all",
+                    chunks=len(results),
+                    reason="pinecone_fallback",
+                )
                 id_map = self._pgvector_store.upsert(results, db_ids)
         else:
+            logger.info("pgvector.storing", source=source_code or "all", chunks=len(results))
             id_map = self._pgvector_store.upsert(results, db_ids)
 
         # Archive embeddings to S3
@@ -209,91 +158,176 @@ class EmbeddingPipeline:
                 try:
                     upload_embeddings(f"{batch_id}/{vector_id}", payload)
                 except Exception as exc:
-                    logger.warning("pipeline.s3_archive_failed", vector_id=vector_id, error=str(exc))
+                    logger.warning(
+                        "pipeline.s3_archive_failed", vector_id=vector_id, error=str(exc)
+                    )
 
         # Update embedding_id in DB
         with self._engine.begin() as conn:
             for chunk_id, vector_id in id_map.items():
                 conn.execute(
-                    text(
-                        "UPDATE processed_chunks SET embedding_id = :eid WHERE id = :id"
-                    ),
+                    text("UPDATE processed_chunks SET embedding_id = :eid WHERE id = :id"),
                     {"eid": vector_id, "id": chunk_id},
                 )
 
-        logger.info("pipeline.embed_chunks_done", embedded=len(results))
+        total_tokens = sum(r.token_count for r in results)
+        logger.info(
+            "pipeline.embed_chunks_done",
+            source=source_code or "all",
+            embedded=len(results),
+            total_tokens=total_tokens,
+            avg_tokens_per_chunk=total_tokens // len(results) if results else 0,
+            store=store_used,
+        )
         return len(results)
 
-    def _process_one_document(
-        self,
-        doc_id,
-        url: str,
-        raw_html: str | None,
-        raw_text: str | None,
-        source_code: str,
-    ) -> int:
-        """Extract, chunk, validate and save one raw_document. Returns chunk count."""
-        if raw_html:
-            try:
-                doc = HTMLExtractor().extract(
-                    raw_html, source_url=url, source_name=source_code
-                )
-            except ExtractionError as exc:
-                logger.warning(
-                    "pipeline.extraction_failed", doc_id=str(doc_id), error=str(exc)
-                )
-                return 0
-        else:
-            doc = ExtractedDocument(
-                title="",
-                text=raw_text or "",
-                source_url=url,
-                source_name=source_code,
-                content_type="pdf",
-                word_count=len((raw_text or "").split()),
-            )
+    def cleanup_deleted_documents(self, source_codes: list[str] | None = None) -> int:
+        """Delete chunks and vectors for all raw_documents with status='deleted'.
 
-        # Archive cleaned text to S3
-        url_hash = hashlib.md5(url.encode()).hexdigest()[:12]
+        Flow per deleted doc:
+          1. Collect embedding_ids from processed_chunks
+          2. Delete vectors from Pinecone (source + 'all' namespaces)
+          3. Delete processed_chunks rows from DB (pgvector implicit)
+          4. raw_documents row kept as status='deleted' for audit trail
+
+        Returns count of documents cleaned up.
+        """
+        db: Session = SessionLocal()
         try:
-            upload_processed_text(source_code, url_hash, doc.text)
-        except Exception as exc:
-            logger.warning("pipeline.s3_processed_archive_failed", url=url, error=str(exc))
+            query = db.query(RawDocument).filter(RawDocument.status == "deleted")
+            if source_codes:
+                from config.models import Source
 
-        metadata = MetadataExtractor().extract(doc)
-        chunks = DocumentChunker().chunk(doc, metadata)
-        result = ChunkValidator().validate(chunks)
-
-        if not result.valid_chunks:
-            return 0
-
-        total = len(result.valid_chunks)
-        with self._engine.begin() as conn:
-            for chunk in result.valid_chunks:
-                token_count = len(_TIKTOKEN.encode(chunk.chunk_text))
-                heading_path_json = json.dumps(chunk.heading_path)
-                conn.execute(
-                    text("""
-                        INSERT INTO processed_chunks
-                            (id, document_id, chunk_text, chunk_index, total_chunks,
-                             heading_path, token_count, metadata_json)
-                        VALUES
-                            (:id, :document_id, :chunk_text, :chunk_index, :total_chunks,
-                             :heading_path, :token_count, CAST(:metadata_json AS JSON))
-                        """),
-                    {
-                        "id": uuid.uuid4(),
-                        "document_id": doc_id,
-                        "chunk_text": chunk.chunk_text,
-                        "chunk_index": chunk.chunk_index,
-                        "total_chunks": total,
-                        "heading_path": heading_path_json,
-                        "token_count": token_count,
-                        "metadata_json": json.dumps(chunk.metadata),
-                    },
+                query = query.join(Source).filter(
+                    Source.code.in_([c.lower() for c in source_codes])
                 )
+            deleted_docs = query.all()
 
-        return total
+            if not deleted_docs:
+                logger.debug("cleanup.nothing_to_clean", source=source_codes or "all")
+                return 0
+
+            logger.info("cleanup.started", docs=len(deleted_docs), source=source_codes or "all")
+            cleaned = 0
+
+            for doc in deleted_docs:
+                source_name = doc.source.code if doc.source else "unknown"
+                chunks = db.query(ProcessedChunk).filter_by(document_id=doc.id).all()
+
+                if chunks:
+                    embedding_ids = [c.embedding_id for c in chunks if c.embedding_id]
+                    logger.info(
+                        "cleanup.doc_found",
+                        url=doc.url,
+                        source=source_name,
+                        chunks=len(chunks),
+                        vectors=len(embedding_ids),
+                    )
+
+                    # Delete from Pinecone
+                    if embedding_ids and self._pinecone_store is not None:
+                        try:
+                            self._pinecone_store.delete_vectors(embedding_ids, source_name)
+                            logger.info(
+                                "cleanup.vectors_deleted",
+                                url=doc.url,
+                                source=source_name,
+                                count=len(embedding_ids),
+                                store="pinecone",
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "cleanup.pinecone_delete_failed",
+                                url=doc.url,
+                                source=source_name,
+                                error=str(exc),
+                            )
+
+                    # Delete processed_chunks (pgvector embedding column goes with the row)
+                    db.query(ProcessedChunk).filter_by(document_id=doc.id).delete()
+                    db.commit()
+                else:
+                    logger.info(
+                        "cleanup.doc_no_chunks",
+                        url=doc.url,
+                        source=source_name,
+                    )
+                    embedding_ids = []
+
+                # Delete MinIO file if it exists
+                if doc.s3_path:
+                    try:
+                        from config.storage import delete_s3_object
+
+                        delete_s3_object(doc.s3_path)
+                        logger.info(
+                            "cleanup.minio_deleted",
+                            url=doc.url,
+                            s3_path=doc.s3_path,
+                            source=source_name,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "cleanup.minio_delete_failed",
+                            url=doc.url,
+                            s3_path=doc.s3_path,
+                            error=str(exc),
+                        )
+                else:
+                    logger.debug("cleanup.minio_no_path", url=doc.url, source=source_name)
+
+                logger.info(
+                    "cleanup.doc_cleaned",
+                    url=doc.url,
+                    source=source_name,
+                    chunks_removed=len(chunks),
+                    vectors_removed=len(embedding_ids),
+                )
+                cleaned += 1
+
+            logger.info(
+                "cleanup.done",
+                docs_cleaned=cleaned,
+                source=source_codes or "all",
+            )
+            return cleaned
+
+        except Exception as exc:
+            logger.error("cleanup.failed", error=str(exc))
+            db.rollback()
+            return 0
+        finally:
+            db.close()
+
+    def purge_vectors(self, source_codes: list[str] | None = None) -> None:
+        """Delete ALL vectors from Pinecone for given sources (or every namespace if none given).
+
+        Use this when DB/MinIO data has been manually wiped and Pinecone has orphan vectors.
+        Namespaces purged per source: '{source}' + 'all'.
+        If source_codes is None, purges all 5 source namespaces + 'all'.
+        """
+        if self._pinecone_store is None:
+            logger.warning(
+                "purge.pinecone_unavailable", reason="Pinecone not configured — nothing to purge"
+            )
+            return
+
+        _ALL_SOURCES = ["hdb", "ura", "iras", "mas", "cpf"]
+        sources = [c.lower() for c in source_codes] if source_codes else _ALL_SOURCES
+
+        namespaces = list(sources) + (
+            ["all"] if not source_codes or set(sources) == set(_ALL_SOURCES) else []
+        )
+
+        logger.info("purge.started", namespaces=namespaces)
+        for ns in namespaces:
+            try:
+                self._pinecone_store.delete_all_in_namespace(ns)
+                logger.info("purge.namespace_done", namespace=ns)
+            except Exception as exc:
+                logger.warning("purge.namespace_failed", namespace=ns, error=str(exc))
+
+        logger.info("purge.done", namespaces_cleared=namespaces)
 
 
 def _source_filter(source_code: str | None) -> tuple[str, dict]:
