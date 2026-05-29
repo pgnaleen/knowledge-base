@@ -25,9 +25,12 @@ A full-stack AI agent for property advisory in Singapore, combining a knowledge 
 ### 1. Clone the Repository
 
 ```bash
-git clone <repo-url>
-cd "N\Property Advisory AI Agent"
+git clone https://github.com/pgnaleen/knowledge-base.git
+cd knowledge-base
+git checkout property-advisory-ai-advisory
 ```
+
+⚠️ **Important**: Open the `knowledge-base` **root folder** in VS Code, not any subfolder. You should see `KB-Pipeline/`, `sg-property-agent/`, `docker-compose.yml`, and other files at the top level.
 
 ### 2. Set Up Environment Files
 
@@ -145,6 +148,15 @@ docker compose down
 | `KB_PIPELINE_URL` | `http://localhost:8000` | KB API endpoint |
 
 ## Troubleshooting
+
+### Error: I only see `KB-Pipeline` in VS Code
+
+**Problem**: After cloning, you opened `KB-Pipeline/` as the workspace folder instead of the project root.
+
+**Solution**: 
+1. In VS Code, go to `File > Open Folder`
+2. Select the **`knowledge-base`** root folder (not `knowledge-base/KB-Pipeline/`)
+3. Verify the Explorer sidebar shows `KB-Pipeline/`, `sg-property-agent/`, `docker-compose.yml`, and `README.md` at the top level
 
 ### Error: `.env not found`
 
