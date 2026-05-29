@@ -1,0 +1,255 @@
+name: sg-property-full
+
+# One-command startup for the full stack:
+#   docker compose up --build -d
+#
+# First run only — apply DB migrations after containers are healthy:
+#   docker exec KB-Pipeline-App alembic upgrade head
+#
+# Services:
+#   Frontend    → http://localhost:3000
+#   Backend API → http://localhost:8001
+#   KB-Pipeline → http://localhost:8000
+#   MinIO UI    → http://localhost:9001  (minioadmin / minioadmin)
+#   LocalTunnel → check logs: docker logs sg-property-localtunnel
+
+services:
+
+  # ── KB-Pipeline infrastructure ──────────────────────────────────────────────
+
+  postgres:
+    image: pgvector/pgvector:0.8.0-pg16
+    container_name: KB-Pipeline-Postgres
+    environment:
+      POSTGRES_USER: kb_user
+      POSTGRES_PASSWORD: kb_pass
+      POSTGRES_DB: kb_pipeline_db
+      TZ: Asia/Singapore
+      PGTZ: Asia/Singapore
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kb_user -d kb_pipeline_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: KB-Pipeline-Redis
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    container_name: KB-Pipeline-Minio
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: KB-Pipeline-Minio-Init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minioadmin minioadmin;
+      mc mb local/sg-property-kb --ignore-existing;
+      exit 0;
+      "
+
+  kb-app:
+    build:
+      context: ./KB-Pipeline
+      dockerfile: Dockerfile.dev
+    container_name: KB-Pipeline-App
+    volumes:
+      - ./KB-Pipeline:/app
+    working_dir: /app
+    environment:
+      PYTHONPATH: /app
+      TZ: Asia/Singapore
+      DATABASE_URL: postgresql://kb_user:kb_pass@postgres:5432/kb_pipeline_db
+      REDIS_URL: redis://redis:6379/0
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin
+      S3_REGION: us-east-1
+      S3_BUCKET: sg-property-kb
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    command: ["tail", "-f", "/dev/null"]
+
+  kb-api:
+    build:
+      context: ./KB-Pipeline
+      dockerfile: Dockerfile.dev
+    container_name: KB-Pipeline-API
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./KB-Pipeline:/app
+    working_dir: /app
+    environment:
+      PYTHONPATH: /app
+      TZ: Asia/Singapore
+      DATABASE_URL: postgresql://kb_user:kb_pass@postgres:5432/kb_pipeline_db
+      REDIS_URL: redis://redis:6379/0
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin
+      S3_REGION: us-east-1
+      S3_BUCKET: sg-property-kb
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    command: ["uvicorn", "api.app:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  kb-worker:
+    build:
+      context: ./KB-Pipeline
+      dockerfile: Dockerfile.dev
+    container_name: KB-Pipeline-Worker
+    volumes:
+      - ./KB-Pipeline:/app
+    working_dir: /app
+    environment:
+      PYTHONPATH: /app
+      TZ: Asia/Singapore
+      DATABASE_URL: postgresql://kb_user:kb_pass@postgres:5432/kb_pipeline_db
+      REDIS_URL: redis://redis:6379/0
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin
+      S3_REGION: us-east-1
+      S3_BUCKET: sg-property-kb
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["celery", "-A", "config.celery_app", "worker", "--loglevel=info"]
+
+  kb-beat:
+    build:
+      context: ./KB-Pipeline
+      dockerfile: Dockerfile.dev
+    container_name: KB-Pipeline-Beat
+    volumes:
+      - ./KB-Pipeline:/app
+    working_dir: /app
+    environment:
+      PYTHONPATH: /app
+      TZ: Asia/Singapore
+      DATABASE_URL: postgresql://kb_user:kb_pass@postgres:5432/kb_pipeline_db
+      REDIS_URL: redis://redis:6379/0
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin
+      S3_REGION: us-east-1
+      S3_BUCKET: sg-property-kb
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["celery", "-A", "config.celery_app", "beat", "--loglevel=info"]
+
+  # ── MCP Server ──────────────────────────────────────────────────────────────
+
+  mcp-server:
+    build: ./sg-property-agent/mcp-server
+    container_name: sg-property-mcp
+    expose:
+      - "8002"
+    environment:
+      KB_PIPELINE_URL: http://kb-api:8000   # service name — same Docker network
+    depends_on:
+      kb-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/mcp')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  # ── Backend ─────────────────────────────────────────────────────────────────
+
+  backend:
+    build: ./sg-property-agent/backend
+    container_name: sg-property-backend
+    ports:
+      - "8001:8001"
+    env_file:
+      - ./sg-property-agent/backend/.env
+    environment:
+      MCP_SERVER_URL: http://mcp-server:8002/mcp
+    depends_on:
+      mcp-server:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Frontend ────────────────────────────────────────────────────────────────
+
+  frontend:
+    build:
+      context: ./sg-property-agent/frontend
+      args:
+        VITE_API_BASE_URL: http://localhost:8001   # browser talks to host port 8001
+    container_name: sg-property-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  # ── LocalTunnel (WhatsApp webhook) ──────────────────────────────────────────
+  # Exposes backend:8001 publicly so Meta can reach the /webhooks/whatsapp endpoint.
+  # Run: docker logs sg-property-localtunnel  → copy the public URL
+  # Set that URL as your WhatsApp webhook in Meta Developer Console.
+
+  localtunnel:
+    image: node:20-alpine
+    container_name: sg-property-localtunnel
+    command: >
+      sh -c "npx --yes localtunnel --port 8001 --local-host backend"
+    depends_on:
+      - backend
+    restart: on-failure
+
+volumes:
+  postgres_data:
+  minio_data:

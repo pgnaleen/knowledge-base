@@ -1,0 +1,47 @@
+﻿Date	Time	Severity	PID	TID	Function	Message
+25-05-2026	14:36:00.131	 INFO	 22136	 23368	DllMain	"DLL_PROCESS_ATTACH Sun Apr 27 14:47:17 2025 11.4.2500.28"
+25-05-2026	14:36:00.140	 INFO	 22136	 23368	DllMain	"PROCESS ATTACHED"
+25-05-2026	14:36:00.141	 INFO	 22136	 23148	LateInitialization	"Intialization..."
+25-05-2026	14:36:00.142	 INFO	 22136	 23148	LoadDisplayDevicesName	"DisplayDevices : "
+25-05-2026	14:36:00.143	 INFO	 22136	 23148	LoadDisplayDevicesName	"\\.\DISPLAY1"
+25-05-2026	14:36:00.144	 INFO	 22136	 23148	LoadDisplayDevicesName	"\\.\DISPLAY2"
+25-05-2026	14:36:00.146	 INFO	 22136	 23148	LoadDisplayDevicesName	"\\.\DISPLAY3"
+25-05-2026	14:36:00.147	 INFO	 22136	 23148	LoadDisplayDevicesName	"\\.\DISPLAY4"
+25-05-2026	14:36:03.164	ERROR	 22136	 23148	LateInitialization	"std::exception caught = GetFileVersionInfoSizeW failed with 1813
+"
+25-05-2026	14:36:03.166	 INFO	 22136	 23148	LateInitialization	"Exe = C:\Users\Gimethd\AppData\Local\Programs\Git\usr\bin\bash.exe
+ProductName = 
+FileDescription = 
+ShadowFolder = %LOCALAPPDATA%\EndpointDLP\print-shadow
+ParsingMode = Hybrid
+DeletePrinterShadowFiles = 1
+PrinterUseDisplayDevicesList = 0
+EnablePrinterEscapeProcessing = 1
+EnableWatermarkForAll = 0
+MaxPrintPages = 4294967295
+GdiPlusToken = 5226906
+ExcludedEscapes = 4117, 37, 4118, 4115, 4121, "
+25-05-2026	14:36:03.167	 INFO	 22136	 23148	LateInitialization	"Intialization finished"
+25-05-2026	14:36:14.407	 INFO	 19808	 11796	DllMain	"DLL_PROCESS_ATTACH Sun Apr 27 14:47:17 2025 11.4.2500.28"
+25-05-2026	14:36:14.416	 INFO	 19808	 11796	DllMain	"PROCESS ATTACHED"
+25-05-2026	14:36:14.417	 INFO	 19808	 24440	LateInitialization	"Intialization..."
+25-05-2026	14:36:14.419	 INFO	 19808	 24440	LoadDisplayDevicesName	"DisplayDevices : "
+25-05-2026	14:36:14.420	 INFO	 19808	 24440	LoadDisplayDevicesName	"\\.\DISPLAY1"
+25-05-2026	14:36:14.421	 INFO	 19808	 24440	LoadDisplayDevicesName	"\\.\DISPLAY2"
+25-05-2026	14:36:14.422	 INFO	 19808	 24440	LoadDisplayDevicesName	"\\.\DISPLAY3"
+25-05-2026	14:36:14.423	 INFO	 19808	 24440	LoadDisplayDevicesName	"\\.\DISPLAY4"
+25-05-2026	14:36:17.434	ERROR	 19808	 24440	LateInitialization	"std::exception caught = GetFileVersionInfoSizeW failed with 1813
+"
+25-05-2026	14:36:17.436	 INFO	 19808	 24440	LateInitialization	"Exe = C:\Users\Gimethd\AppData\Local\Programs\Git\usr\bin\bash.exe
+ProductName = 
+FileDescription = 
+ShadowFolder = %LOCALAPPDATA%\EndpointDLP\print-shadow
+ParsingMode = Hybrid
+DeletePrinterShadowFiles = 1
+PrinterUseDisplayDevicesList = 0
+EnablePrinterEscapeProcessing = 1
+EnableWatermarkForAll = 0
+MaxPrintPages = 4294967295
+GdiPlusToken = 5241171
+ExcludedEscapes = 4117, 37, 4118, 4115, 4121, "
+25-05-2026	14:36:17.438	 INFO	 19808	 24440	LateInitialization	"Intialization finished"

@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment — never commit real secrets
+.env
+.env.local
+.env.production
+
+# Docker
+docker-compose.override.yml
+
+# Scrapy
+.scrapy/
+
+# Playwright
+playwright-report/
+test-results/
+
+# Data files
+data/
+*.pdf
+*.html
+
+# Logs
+logs/
+*.log
+
+# Testing & coverage
+.coverage
+htmlcov/
+.pytest_cache/
+
+# MinIO / S3 local data
+minio-data/
+
+# Alembic — do NOT ignore versions/; only ignore auto-generated pycache
+alembic/__pycache__/
+
+# OS
+.DS_Store
+Thumbs.db

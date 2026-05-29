@@ -1,0 +1,7 @@
+﻿Date	Time	Severity	PID	TID	Function	Message
+21-05-2026	10:49:31.343	 INFO	 19712	 21372	DllMain	"DLL_PROCESS_ATTACH Sun Apr 27 14:47:17 2025 11.4.2500.28"
+21-05-2026	10:49:31.345	 INFO	 19712	  3868	LateInitialization	"Intialization..."
+21-05-2026	10:49:31.346	 INFO	 19712	  3868	LateInitialization	"Exe = C:\Users\Gimethd\AppData\Local\Programs\Git\usr\bin\tail.exe"
+21-05-2026	10:49:31.347	 INFO	 19712	  3868	LateInitialization	"IsExplorer = 0"
+21-05-2026	10:49:31.349	 INFO	 19712	  3868	Edlp::Path::InitializeExcludedPathPatterns	"Windows drive = C:"
+21-05-2026	10:49:31.351	 INFO	 19712	  3868	LateInitialization	"Intialization finished"

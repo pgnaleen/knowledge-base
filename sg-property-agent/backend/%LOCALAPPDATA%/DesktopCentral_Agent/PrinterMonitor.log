@@ -1,0 +1,24 @@
+﻿Date	Time	Severity	PID	TID	Function	Message
+21-05-2026	10:49:31.310	 INFO	 19712	 22624	DllMain	"DLL_PROCESS_ATTACH Sun Apr 27 14:47:17 2025 11.4.2500.28"
+21-05-2026	10:49:31.319	 INFO	 19712	 22624	DllMain	"PROCESS ATTACHED"
+21-05-2026	10:49:31.321	 INFO	 19712	 13248	LateInitialization	"Intialization..."
+21-05-2026	10:49:31.322	 INFO	 19712	 13248	LoadDisplayDevicesName	"DisplayDevices : "
+21-05-2026	10:49:31.323	 INFO	 19712	 13248	LoadDisplayDevicesName	"\\.\DISPLAY1"
+21-05-2026	10:49:31.324	 INFO	 19712	 13248	LoadDisplayDevicesName	"\\.\DISPLAY2"
+21-05-2026	10:49:31.325	 INFO	 19712	 13248	LoadDisplayDevicesName	"\\.\DISPLAY3"
+21-05-2026	10:49:31.326	 INFO	 19712	 13248	LoadDisplayDevicesName	"\\.\DISPLAY4"
+21-05-2026	10:49:34.342	ERROR	 19712	 13248	LateInitialization	"std::exception caught = GetFileVersionInfoSizeW failed with 1813
+"
+21-05-2026	10:49:34.343	 INFO	 19712	 13248	LateInitialization	"Exe = C:\Users\Gimethd\AppData\Local\Programs\Git\usr\bin\tail.exe
+ProductName = 
+FileDescription = 
+ShadowFolder = %LOCALAPPDATA%\EndpointDLP\print-shadow
+ParsingMode = Hybrid
+DeletePrinterShadowFiles = 1
+PrinterUseDisplayDevicesList = 0
+EnablePrinterEscapeProcessing = 1
+EnableWatermarkForAll = 0
+MaxPrintPages = 4294967295
+GdiPlusToken = 6310625
+ExcludedEscapes = 4117, 37, 4118, 4115, 4121, "
+21-05-2026	10:49:34.344	 INFO	 19712	 13248	LateInitialization	"Intialization finished"
