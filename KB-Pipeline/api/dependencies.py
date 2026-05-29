@@ -4,8 +4,6 @@ init_services() is called once from the FastAPI lifespan context manager.
 get_retrieval_service() is used as a FastAPI dependency on each request.
 """
 
-from logging import log
-
 from config.logger import get_logger
 from config.settings import settings
 from embedders.bm25_store import BM25Store
@@ -66,5 +64,3 @@ def get_retrieval_service() -> RetrievalService:
     if _retrieval_service is None:
         raise RuntimeError("Services not initialised — init_services() was not called")
     return _retrieval_service
-
-log.info("dependencies_loaded", message="Retrieval Service Dependencies have been loaded and are ready to be initialized.")

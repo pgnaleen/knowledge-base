@@ -5,7 +5,6 @@ Uses lightweight rules aligned with ``config/sources.yml`` tag labels
 and source agency codes (hdb, ura, iras, mas, cpf).
 """
 
-from asyncio import log
 import re
 
 from api.query_expander import ExpandedQuery
@@ -59,8 +58,6 @@ def infer_filters_from_query(query: str) -> FilterParams:
         property_type=property_types or None,
         citizenship_type=citizenship_types or None,
     )
-
-log.info("metadata_filter_inference_loaded", message="Metadata filter inference module loaded successfully", sources=[], property_types=[], citizenship_types=[])    
 
 
 def _union_lists(a: list[str] | None, b: list[str] | None) -> list[str] | None:

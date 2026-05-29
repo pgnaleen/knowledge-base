@@ -1,6 +1,5 @@
 """Pydantic request / response models for the Retrieval API."""
 
-from logging import log
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -52,7 +51,6 @@ class FilterParams(BaseModel):
             property_type=union(self.property_type, other.property_type),
             citizenship_type=union(self.citizenship_type, other.citizenship_type),
         )
-log.info("schemas_loaded", message="FilterParams schema have been defined", source=[], property_type=[], citizenship_type=[])
 
 
 # Checked 
@@ -63,8 +61,6 @@ class RetrieveRequest(BaseModel):
     top_k: int = Field(default=5, ge=1, le=50)
     filters: FilterParams = Field(default_factory=FilterParams)
     search_mode: Literal["vector", "hybrid"] = "hybrid"
-
-log.info("schemas_loaded", message="Retrieve Request schema have been defined and are ready to be used in API requests.")
 
 
 class ChunkResult(BaseModel):
@@ -95,5 +91,3 @@ class RetrieveResponse(BaseModel):
     inferred_filters: FilterParams = Field(default_factory=FilterParams)
     applied_filters: FilterParams = Field(default_factory=FilterParams)
     trace: RetrievalTrace | None = None
-
-log.info("schemas_loaded", message="Retrieve Response schema have been defined and are ready to be used in API responses.")

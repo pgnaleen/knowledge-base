@@ -1,6 +1,5 @@
 """RetrievalService — embeds query, dispatches to vector store, assembles response."""
 
-from asyncio import log
 import time
 
 from sqlalchemy import text
@@ -55,8 +54,6 @@ class RetrievalService:
             infer_filters_from_query(request.query),
             expanded,
         )
-
-        log.info("retrieve.merge_inferred_and_expanded", source=auto_filters.source, property_type=auto_filters.property_type, citizenship=auto_filters.citizenship_type)        
 
         merged_filters = self._merge_filters(request.filters, auto_filters)
 
@@ -132,8 +129,6 @@ class RetrievalService:
         if request.search_mode == "hybrid" and self._bm25 is not None:
             return self._query_hybrid(vector, request)
         return self._query_vector(vector, request)
-    
-    log.info("retrieval_service_initialized", message="RetrievalService has been initialized and is ready to handle retrieval requests.")
 
     def _query_vector(
         self,
@@ -157,8 +152,6 @@ class RetrievalService:
             citizenship_filter=request.filters.citizenship_type,
         )
         return self._map_pgvector(rows), "pgvector"
-    
-    log.info("retrieval_service_initialized", message="RetrievalService has been initialized and is ready to handle retrieval requests.")
 
     def _query_hybrid(
         self,
@@ -210,8 +203,6 @@ class RetrievalService:
         results = self._map_hybrid(fused_ids)
 
         return results, f"hybrid_{store_used}"
-    
-    log.info("retrieval_service_initialized", message="RetrievalService has been initialized and is ready to handle retrieval requests.")
 
     def _resolve_namespace_and_filter(
         self,
@@ -237,8 +228,6 @@ class RetrievalService:
 
         return "all", self._combine_conditions(metadata_conditions)
 
-        log.info("retrieve.resolve_namespace_and_filter", namespace=namespace, filter_dict=base_filter)
-
     @staticmethod
     def _fuse_rrf(
         vector_ids: list[str],
@@ -257,8 +246,6 @@ class RetrievalService:
             for id_ in all_ids
         }
         return sorted(scores, key=scores.__getitem__, reverse=True)[:top_k]
-
-        log.info("retrieve.rrf_fusion_done", fused_ids=fused_ids, vector_count=len(vector_ids), bm25_count=len(bm25_ids))
 
     def _map_hybrid(self, fused_ids: list[str]) -> list[ChunkResult]:
         """Map fused IDs to ChunkResult, computing RRF scores for ranking."""

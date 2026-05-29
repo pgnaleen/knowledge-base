@@ -22,6 +22,8 @@ services:
   postgres:
     image: pgvector/pgvector:0.8.0-pg16
     container_name: sg-property-kb-postgres
+    ports:
+      - "5432:5432"
     environment:
       POSTGRES_USER: kb_user
       POSTGRES_PASSWORD: kb_pass
@@ -201,7 +203,7 @@ services:
       kb-api:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/mcp')"]
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('localhost', 8002), timeout=2)"]
       interval: 10s
       timeout: 5s
       retries: 5

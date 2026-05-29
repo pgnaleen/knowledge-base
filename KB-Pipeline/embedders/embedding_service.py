@@ -1,6 +1,5 @@
 """Embedding service — OpenRouter primary, OpenAI fallback."""
 
-from logging import log
 import math
 from typing import Iterator
 
@@ -62,7 +61,7 @@ class EmbeddingService:
         # Tracks which client is active for the current run — starts at primary
         self._active_provider: str = "openrouter" if self._openrouter_client else "openai"
 
-        log.info(
+        logger.info(
             "embedding_service_initialized",
             openrouter_available=self._openrouter_client is not None,
             openai_available=self._openai_client is not None,
