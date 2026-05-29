@@ -4,7 +4,7 @@ name: sg-property-full
 #   docker compose up --build -d
 #
 # First run only — apply DB migrations after containers are healthy:
-#   docker exec KB-Pipeline-App alembic upgrade head
+#   docker exec sg-property-kb-app alembic upgrade head
 #
 # Services:
 #   Frontend    → http://localhost:3000
@@ -12,6 +12,8 @@ name: sg-property-full
 #   KB-Pipeline → http://localhost:8000
 #   MinIO UI    → http://localhost:9001  (minioadmin / minioadmin)
 #   LocalTunnel → check logs: docker logs sg-property-localtunnel
+#
+# Note: KB-Pipeline containers renamed (sg-property-kb-*) to coexist with old KB-Pipeline-only stack
 
 services:
 
@@ -19,7 +21,7 @@ services:
 
   postgres:
     image: pgvector/pgvector:0.8.0-pg16
-    container_name: KB-Pipeline-Postgres
+    container_name: sg-property-kb-postgres
     environment:
       POSTGRES_USER: kb_user
       POSTGRES_PASSWORD: kb_pass
@@ -36,7 +38,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: KB-Pipeline-Redis
+    container_name: sg-property-kb-redis
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -45,7 +47,7 @@ services:
 
   minio:
     image: minio/minio:latest
-    container_name: KB-Pipeline-Minio
+    container_name: sg-property-kb-minio
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
@@ -63,7 +65,7 @@ services:
 
   minio-init:
     image: minio/mc:latest
-    container_name: KB-Pipeline-Minio-Init
+    container_name: sg-property-kb-minio-init
     depends_on:
       minio:
         condition: service_healthy
@@ -78,7 +80,7 @@ services:
     build:
       context: ./KB-Pipeline
       dockerfile: Dockerfile.dev
-    container_name: KB-Pipeline-App
+    container_name: sg-property-kb-app
     volumes:
       - ./KB-Pipeline:/app
     working_dir: /app
@@ -105,7 +107,7 @@ services:
     build:
       context: ./KB-Pipeline
       dockerfile: Dockerfile.dev
-    container_name: KB-Pipeline-API
+    container_name: sg-property-kb-api
     ports:
       - "8000:8000"
     volumes:
@@ -140,7 +142,7 @@ services:
     build:
       context: ./KB-Pipeline
       dockerfile: Dockerfile.dev
-    container_name: KB-Pipeline-Worker
+    container_name: sg-property-kb-worker
     volumes:
       - ./KB-Pipeline:/app
     working_dir: /app
@@ -165,7 +167,7 @@ services:
     build:
       context: ./KB-Pipeline
       dockerfile: Dockerfile.dev
-    container_name: KB-Pipeline-Beat
+    container_name: sg-property-kb-beat
     volumes:
       - ./KB-Pipeline:/app
     working_dir: /app
