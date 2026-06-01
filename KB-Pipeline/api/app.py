@@ -2,13 +2,25 @@
 
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
+from datetime import datetime
 
 import structlog
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, HTTPException
 
 from api.dependencies import get_retrieval_service, init_services
 from api.retrieval import RetrievalService
-from api.schemas import RetrieveRequest, RetrieveResponse
+from api.schemas import (
+    RetrieveRequest,
+    RetrieveResponse,
+    CrawlRequest,
+    TaskResponse,
+    JobsListResponse,
+    TaskExecutionDetail,
+)
+from config.database import engine
+from config.models import TaskExecution
+from sqlalchemy.orm import Session
+from sqlalchemy import desc
 
 log = structlog.get_logger(__name__)
 
@@ -58,3 +70,142 @@ def retrieve(
         top_title=response.results[0].title if response.results else None,
     )
     return response
+
+
+# ── Pipeline Task Endpoints ────────────────────────────────────────────────
+
+
+@app.post("/crawl", response_model=TaskResponse, status_code=202)
+def start_crawl(request: CrawlRequest) -> TaskResponse:
+    """Start a crawl job for a specific source.
+
+    Queues a Celery task to crawl the source with optional page limit and custom settings.
+    Returns immediately with task_id for tracking.
+    """
+    from tasks.pipeline_tasks import run_source_pipeline_task
+
+    log.info(
+        "crawl_requested",
+        source=request.source_code,
+        job_type=request.job_type,
+        page_limit=request.page_limit,
+    )
+
+    # Prepare Scrapy settings with page limit if provided
+    scrapy_settings = request.scrapy_settings or {}
+    if request.page_limit:
+        scrapy_settings["CLOSESPIDER_PAGECOUNT"] = request.page_limit
+
+    # Queue the Celery task
+    task = run_source_pipeline_task.delay(
+        request.source_code,
+        request.job_type,
+        scrapy_settings=scrapy_settings,
+    )
+
+    log.info(
+        "crawl_task_queued",
+        source=request.source_code,
+        job_type=request.job_type,
+        task_id=task.id,
+        page_limit=request.page_limit,
+        scrapy_settings=scrapy_settings,
+    )
+
+    return TaskResponse(
+        task_id=task.id,
+        status="queued",
+        source_code=request.source_code,
+        job_type=request.job_type,
+    )
+
+
+@app.post("/process", response_model=TaskResponse, status_code=202)
+def start_process() -> TaskResponse:
+    """Start processing of all pending documents.
+
+    Queues a Celery task to extract, chunk, and validate pending raw documents.
+    Returns immediately with task_id for tracking.
+    """
+    from tasks.pipeline_tasks import process_documents_task
+
+    log.info("process_requested")
+
+    task = process_documents_task.delay()
+
+    return TaskResponse(
+        task_id=task.id,
+        status="queued",
+    )
+
+
+@app.post("/embed", response_model=TaskResponse, status_code=202)
+def start_embed() -> TaskResponse:
+    """Start embedding of all unembedded chunks.
+
+    Queues a Celery task to embed unembedded chunks and store in vector DB.
+    Returns immediately with task_id for tracking.
+    """
+    from tasks.pipeline_tasks import embed_chunks_task
+
+    log.info("embed_requested")
+
+    task = embed_chunks_task.delay()
+
+    return TaskResponse(
+        task_id=task.id,
+        status="queued",
+    )
+
+
+@app.get("/jobs", response_model=JobsListResponse)
+def get_jobs(
+    source: str | None = None,
+    status: str | None = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> JobsListResponse:
+    """Get task execution history with optional filtering.
+
+    Returns paginated list of task executions with logs and results.
+    """
+    log.info(
+        "jobs_query",
+        source=source,
+        status=status,
+        limit=limit,
+        offset=offset,
+    )
+
+    with Session(engine) as session:
+        query = session.query(TaskExecution)
+
+        if source:
+            query = query.filter(TaskExecution.source_code == source)
+        if status:
+            query = query.filter(TaskExecution.status == status)
+
+        total = query.count()
+        executions = (
+            query.order_by(desc(TaskExecution.created_at))
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+
+        jobs = [
+            TaskExecutionDetail(
+                task_id=ex.id,
+                task_name=ex.task_name,
+                source_code=ex.source_code,
+                status=ex.status,
+                started_at=ex.started_at.isoformat(),
+                completed_at=ex.completed_at.isoformat() if ex.completed_at else None,
+                result_summary=ex.result_summary or {},
+                logs=ex.logs or [],
+                error_message=ex.error_message,
+            )
+            for ex in executions
+        ]
+
+        return JobsListResponse(jobs=jobs, total=total)

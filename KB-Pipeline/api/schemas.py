@@ -91,3 +91,53 @@ class RetrieveResponse(BaseModel):
     inferred_filters: FilterParams = Field(default_factory=FilterParams)
     applied_filters: FilterParams = Field(default_factory=FilterParams)
     trace: RetrievalTrace | None = None
+
+
+# ── Pipeline Task Endpoints ────────────────────────────────────────────────
+
+class CrawlRequest(BaseModel):
+    """POST /crawl request body."""
+
+    source_code: str = Field(description="Source code: hdb, ura, iras, mas, cpf")
+    page_limit: int | None = Field(default=None, ge=1, description="Max pages to crawl (optional)")
+    job_type: Literal["full", "incremental"] = Field(default="incremental")
+    scrapy_settings: dict | None = Field(default=None, description="Custom Scrapy settings")
+
+
+class TaskResponse(BaseModel):
+    """Generic task response for /crawl, /process, /embed."""
+
+    task_id: str
+    status: str
+    source_code: str | None = None
+    job_type: str | None = None
+
+
+class TaskExecutionLog(BaseModel):
+    """A single structured log event from task execution."""
+
+    event: str
+    timestamp: str | None = None
+    level: str = "info"
+    details: dict = Field(default_factory=dict)
+
+
+class TaskExecutionDetail(BaseModel):
+    """Detailed task execution record with logs and results."""
+
+    task_id: str
+    task_name: str
+    source_code: str | None = None
+    status: str
+    started_at: str | None = None
+    completed_at: str | None = None
+    result_summary: dict = Field(default_factory=dict)
+    logs: list[dict] = Field(default_factory=list)
+    error_message: str | None = None
+
+
+class JobsListResponse(BaseModel):
+    """GET /jobs response body — list of task executions."""
+
+    jobs: list[TaskExecutionDetail]
+    total: int

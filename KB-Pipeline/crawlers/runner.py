@@ -2,8 +2,9 @@ import uuid
 from datetime import datetime
 
 from scrapy import signals
-from scrapy.crawler import CrawlerProcess
+from scrapy.crawler import CrawlerProcess, CrawlerRunner
 from scrapy.utils.project import get_project_settings
+from twisted.internet import reactor
 
 from config.database import SessionLocal
 from config.logger import get_logger
@@ -30,17 +31,19 @@ def run_crawlers(source_codes: list[str] | None = None, job_type: str = "full", 
         codes = source_codes
         run_generic = False
 
+    logger.info(f"Starting crawl with sources: {codes}, job_type: {job_type}, scrapy_settings: {scrapy_settings}")
+
     settings = get_project_settings()
     if scrapy_settings:
         settings.update(scrapy_settings)
-    process = CrawlerProcess(settings)
+    runner = CrawlerRunner(settings)
     db = SessionLocal()
     job_map: dict[str, uuid.UUID] = {}
-    generic_job_id: uuid.UUID | None = None
     summary: list[dict] = []
 
-    # Capture stats via spider_closed signal — process.crawlers is empty after start() returns
-    # in Scrapy 2.x because crawlers are removed from the set as they complete.
+    logger.info(f"Initialized CrawlerRunner with settings: {settings.attributes}")
+
+    # Capture stats via spider_closed signal
     spider_results: dict[str, dict] = {}
 
     def _on_spider_closed(spider, reason):
@@ -68,18 +71,23 @@ def run_crawlers(source_codes: list[str] | None = None, job_type: str = "full", 
             logger.info("crawl.job_created", source=code, job_id=str(job.id))
             job_map[SPIDER_MAP[code]] = job.id
 
-            process.crawl(SPIDER_MAP[code])
+            deferred = runner.crawl(SPIDER_MAP[code])
+            deferred.addBoth(lambda _: None)  # Chain to prevent unhandled rejection
 
         # If running all sources, also run generic spider to cover any non-custom sources
         if run_generic:
             logger.info("crawl.generic_spider_enabled")
-            process.crawl("generic")
+            deferred = runner.crawl("generic")
+            deferred.addBoth(lambda _: None)
 
         # Connect signal to every crawler before start() — crawlers are still in the set here
-        for crawler in process.crawlers:
+        for crawler in runner.crawlers:
             crawler.signals.connect(_on_spider_closed, signal=signals.spider_closed)
 
-        process.start()
+        # Use CrawlerRunner.join() which returns a Deferred that fires when all crawlers complete
+        d = runner.join()
+        d.addBoth(lambda _: reactor.stop())
+        reactor.run()
         logger.info("crawl.all_completed")
 
         # Update jobs using stats captured by the spider_closed signal handler
