@@ -1,8 +1,7 @@
 """Pre-retrieval metadata filter inference from the user query (task 3.4).
 
-Uses lightweight rules aligned with ``config/sources.yml`` tag labels
-(``property_type``: HDB, private, EC, commercial; ``citizenship``: SC, PR, foreigner)
-and source agency codes (hdb, ura, iras, mas, cpf).
+Uses lightweight rules aligned with DB tag_config (property_type: HDB, private, EC, commercial;
+citizenship: SC, PR, foreigner) and source agency codes (hdb, ura, iras, mas, cpf).
 """
 
 import re

@@ -1,5 +1,3 @@
-import os
-import yaml
 from celery import Celery
 from celery.schedules import crontab
 from config.settings import settings
@@ -23,52 +21,34 @@ app.conf.update(
 )
 
 def get_dynamic_beat_schedule():
-    """Read sources.yml and generate a Celery Beat schedule."""
-    sources_path = os.path.join(os.path.dirname(__file__), "sources.yml")
-    if not os.path.exists(sources_path):
-        return {}
+    """Read source schedules from DB and generate a Celery Beat schedule."""
+    from config.database import SessionLocal
+    from config.models import Source
 
-    with open(sources_path, "r") as f:
-        config = yaml.safe_load(f)
-    
-    sources = config.get("sources", {})
     schedule = {}
-
-    for code, source in sources.items():
-        sched_config = source.get("schedule", {})
-        
-        # Full Crawl Schedule
-        if "full" in sched_config:
-            cron = sched_config["full"].split()
-            if len(cron) == 5:
-                schedule[f"crawl-{code}-full"] = {
-                    "task": "tasks.pipeline_tasks.run_source_pipeline_task",
-                    "schedule": crontab(
-                        minute=cron[0],
-                        hour=cron[1],
-                        day_of_month=cron[2],
-                        month_of_year=cron[3],
-                        day_of_week=cron[4]
-                    ),
-                    "args": (code, "full")
-                }
-
-        # Incremental Crawl Schedule
-        if "incremental" in sched_config:
-            cron = sched_config["incremental"].split()
-            if len(cron) == 5:
-                schedule[f"crawl-{code}-incremental"] = {
-                    "task": "tasks.pipeline_tasks.run_source_pipeline_task",
-                    "schedule": crontab(
-                        minute=cron[0],
-                        hour=cron[1],
-                        day_of_month=cron[2],
-                        month_of_year=cron[3],
-                        day_of_week=cron[4]
-                    ),
-                    "args": (code, "incremental")
-                }
-
+    try:
+        db = SessionLocal()
+        try:
+            for source in db.query(Source).filter_by(is_active=True).all():
+                sched = (source.crawl_config or {}).get("schedule", {})
+                for job_type, cron_str in sched.items():
+                    parts = cron_str.split()
+                    if len(parts) == 5:
+                        schedule[f"crawl-{source.code}-{job_type}"] = {
+                            "task": "tasks.pipeline_tasks.run_source_pipeline_task",
+                            "schedule": crontab(
+                                minute=parts[0],
+                                hour=parts[1],
+                                day_of_month=parts[2],
+                                month_of_year=parts[3],
+                                day_of_week=parts[4],
+                            ),
+                            "args": (source.code, job_type),
+                        }
+        finally:
+            db.close()
+    except Exception:
+        pass
     return schedule
 
 # Set the beat schedule

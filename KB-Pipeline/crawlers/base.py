@@ -1,4 +1,5 @@
 from collections.abc import Generator
+from logging import log
 from urllib.parse import urlparse
 
 import scrapy
@@ -18,6 +19,7 @@ def load_source_config_from_db(source_name: str) -> dict:
     Used only if source_config is not already set as a class attribute
     (preserves test patterns where TestSpider sets source_config directly).
     """
+    
     from config.database import SessionLocal
     from config.models import Source
 
@@ -26,10 +28,10 @@ def load_source_config_from_db(source_name: str) -> dict:
         source = db.query(Source).filter_by(code=source_name, is_active=True).first()
         if not source:
             raise RuntimeError(f"Source '{source_name}' not found or inactive in DB")
+        logger.info(f"Loaded config for source '{source_name}' from DB")
         return source.crawl_config or {}
     finally:
         db.close()
-
 
 class BaseCrawler(scrapy.Spider):
     source_name: str
@@ -41,6 +43,8 @@ class BaseCrawler(scrapy.Spider):
         if not getattr(self, "source_config", None):
             self.source_config = load_source_config_from_db(self.source_name)
         self._apply_db_custom_settings()
+        logger.info(f"Initialized crawler for source '{self.source_name}'")
+
 
     def _apply_db_custom_settings(self):
         """Merge crawler DB config into custom_settings. Subclass values win."""
@@ -53,8 +57,13 @@ class BaseCrawler(scrapy.Spider):
         # Merge: subclass custom_settings takes precedence
         self.custom_settings = {**base, **(self.custom_settings or {})}
 
+        logger.info(f" (delay={base.get('DOWNLOAD_DELAY')}, ")
+        logger.info(f" (respect_robots_txt={base.get('ROBOTSTXT_OBEY')}, ")
+        logger.debug(f"Applied DB config to custom_settings for '{self.source_name}': {self.custom_settings}")
+
     def get_start_urls(self) -> list[str]:
         """Return start URLs for this source. Reads from DB config."""
+        logger.info(f"Getting start URLs for source '{self.source_name}' from DB config")
         return self.source_config.get("start_urls", [])
 
     def parse_document(self, response) -> Generator[CrawlItem, None, None]:

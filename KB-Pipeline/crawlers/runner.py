@@ -41,7 +41,7 @@ def run_crawlers(source_codes: list[str] | None = None, job_type: str = "full", 
     job_map: dict[str, uuid.UUID] = {}
     summary: list[dict] = []
 
-    logger.info(f"Initialized CrawlerRunner with settings: {settings.attributes}")
+    logger.info(f"Initialized CrawlerRunner with settings")
 
     # Capture stats via spider_closed signal
     spider_results: dict[str, dict] = {}

@@ -75,15 +75,7 @@ wait_healthy "$APP"
 step "Running Alembic migrations (inside app container)"
 
 app alembic upgrade head
-ok "Database schema created and 5 sources seeded"
-
-# ─── Sync sources config ──────────────────────────────────────────────────────
-
-step "Syncing sources config from sources.yml to database"
-
-app python -m config.sync_sources \
-    && ok "Source crawl config synced to DB (content_selectors, tag_config)" \
-    || warn "Source sync failed — check sources.yml format"
+ok "Database schema created and 5 sources seeded with full crawl config"
 
 # ─── MinIO buckets ────────────────────────────────────────────────────────────
 

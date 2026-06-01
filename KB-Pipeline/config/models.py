@@ -18,6 +18,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSON, JSONB, UUID
 from sqlalchemy.orm import relationship
+from datetime import datetime
 
 from config.database import Base
 
@@ -123,3 +124,30 @@ class CrawlJob(Base):
     source = relationship("Source")
 
     __table_args__ = (Index("ix_crawl_jobs_source_status", "source_id", "status"),)
+
+
+class TaskExecution(Base):
+    """Celery task execution history with logs and results."""
+
+    __tablename__ = "task_executions"
+
+    id = Column(String(36), primary_key=True)  # Celery task_id
+    task_name = Column(String(255), nullable=False)  # "crawl", "process", "embed"
+    source_code = Column(String(50))  # Source code if task is source-specific (hdb, ura, etc.)
+    status = Column(
+        Enum("pending", "started", "success", "failed", "retry", name="task_status"),
+        default="pending",
+    )
+    started_at = Column(DateTime, server_default=func.now())
+    completed_at = Column(DateTime)
+    logs = Column(JSON, default=list)  # Array of structured log events
+    result_summary = Column(JSON, default=dict)  # {docs_crawled, chunks_processed, vectors_stored, errors}
+    error_message = Column(Text)
+    created_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_task_executions_task_name", "task_name"),
+        Index("ix_task_executions_source", "source_code"),
+        Index("ix_task_executions_status", "status"),
+        Index("ix_task_executions_created", "created_at"),
+    )

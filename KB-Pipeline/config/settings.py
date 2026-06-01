@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql://kb_user:kb_pass@localhost:5432/kb_pipeline_db"
 
     # Redis
-    redis_url: str = "redis://localhost:6379/0"
+    redis_url: str = "redis://l ocalhost:6379/0"
 
     # S3 / MinIO — single bucket with prefix-based layout
     s3_endpoint: str = "http://localhost:9000"

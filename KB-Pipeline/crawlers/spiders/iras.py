@@ -1,6 +1,6 @@
 """IRAS (Inland Revenue Authority of Singapore) crawler.
 
-Config-driven via sources.yml → DB crawl_config.
+Config-driven via DB crawl_config (seeded by migration 001).
 No custom Python behavior — all logic delegated to BaseCrawler.
 """
 

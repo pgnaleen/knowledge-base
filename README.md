@@ -73,6 +73,16 @@ From the root directory:
 docker compose up --build -d
 ```
 
+**⚠️ Important**: After starting, run the KB-Pipeline database setup:
+
+```bash
+# Apply database migrations and seed sources
+docker exec sg-property-kb-app alembic upgrade head
+docker exec sg-property-kb-app python -m config.sync_sources
+```
+
+(This is automatic if you ran the setup script, but required if you started with `docker compose up`.)
+
 Services will be available at:
 
 | Service | URL | Purpose |
@@ -202,6 +212,23 @@ docker compose ps
 
 If KB-Pipeline is missing, ensure the root `docker-compose.yml` includes it (it should).
 
+### Crawl returns 0 pages found
+
+If you start the containers with `docker compose up -d` without running setup, the database hasn't been seeded. Run:
+
+```bash
+# Apply database migrations (creates tables + seeds 5 sources)
+docker exec sg-property-kb-app alembic upgrade head
+
+# Sync sources config from sources.yml to database
+docker exec sg-property-kb-app python -m config.sync_sources
+```
+
+Then try crawling again:
+```bash
+docker exec sg-property-kb-app python run_pipeline.py --crawl-only hdb -S CLOSESPIDER_PAGECOUNT=10
+```
+
 ## Development
 
 ### Local Frontend Dev (with hot reload)
@@ -246,9 +273,8 @@ docker compose --profile frontend-only up -d
 
 ## Documentation
 
-- [KB-Pipeline README](KB-Pipeline/README.md) — Data pipeline details
+- [KB-Pipeline CLAUDE.md](KB-Pipeline/CLAUDE.md) — Data pipeline setup, commands, architecture & technical reference
 - [SG Property Agent README](sg-property-agent/README.md) — Architecture & API design
-- [KB-Pipeline CLAUDE.md](KB-Pipeline/CLAUDE.md) — Technical reference
 
 ## License
 

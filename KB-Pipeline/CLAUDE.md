@@ -16,34 +16,52 @@ bash setup.sh
 docker compose up -d
 ```
 
+### After First Docker Startup
+
+If you started the containers with `docker compose up -d` without running the full setup script:
+
+```bash
+# Apply database migrations (creates tables + seeds all 5 sources with full config)
+docker exec sg-property-kb-app alembic upgrade head
+
+# Initialise MinIO storage buckets
+docker exec sg-property-kb-app python -c "from config.storage import StorageClient; StorageClient().ensure_buckets()"
+```
+
 ## Common Commands
 
 All commands run **inside the app container** — no local Python/venv needed.
 
 ```bash
 # Open an interactive shell inside the container (easiest for development)
-docker exec -it KB-Pipeline-App bash
+docker exec -it sg-property-kb-app bash
 
 # OR run individual commands directly:
 
 # Run all unit tests with coverage
-docker exec KB-Pipeline-App python -m pytest tests/unit/ -v
+docker exec sg-property-kb-app python -m pytest tests/unit/ -v
 
 # Run a single test file
-docker exec KB-Pipeline-App python -m pytest tests/unit/test_base_spider.py -v
+docker exec sg-property-kb-app python -m pytest tests/unit/test_base_spider.py -v
 
 # Lint and format (run before every commit)
-docker exec KB-Pipeline-App ruff check .
-docker exec KB-Pipeline-App black .
+docker exec sg-property-kb-app ruff check .
+docker exec sg-property-kb-app black .
 
-# Apply database migrations
-docker exec KB-Pipeline-App alembic upgrade head
+# Apply database migrations (creates tables + seeds all 5 sources with config)
+docker exec sg-property-kb-app alembic upgrade head
 
 # Initialise MinIO buckets
-docker exec KB-Pipeline-App python -c "from config.storage import StorageClient; StorageClient().ensure_buckets()"
+docker exec sg-property-kb-app python -c "from config.storage import StorageClient; StorageClient().ensure_buckets()"
 
-# Run a spider
-docker exec KB-Pipeline-App scrapy crawl hdb
+# Run the full pipeline (crawl → process → embed)
+docker exec sg-property-kb-app python run_pipeline.py
+
+# Run crawl only with page limit (e.g., crawl HDB with max 10 pages)
+docker exec sg-property-kb-app python run_pipeline.py --crawl-only hdb -S CLOSESPIDER_PAGECOUNT=10
+
+# Run spider directly
+docker exec sg-property-kb-app scrapy crawl hdb
 
 # Stop everything
 docker compose down
