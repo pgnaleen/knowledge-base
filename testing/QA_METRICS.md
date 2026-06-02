@@ -488,10 +488,325 @@ Error Rate = Failed Requests / Total Requests × 100
 
 ---
 
-## How to Use This Document
+## How to Run QA — Step by Step
 
-1. **Ground truth first** — Before writing test code for any layer, prepare an Excel sheet with: Test Case ID | Input | Expected Output | Layer | Metric
-2. **One layer at a time** — Start with Layer 1 (Crawlers), get it green, then move to Layer 2, etc.
-3. **Automate the formula** — Each metric above has a "How to compute it" section. Implement that as a Python function in the relevant test file under `testing/kb-pipeline/` or `testing/agent/`
-4. **Red before green** — Write a failing test first (confirm the metric calculation works), then verify it passes against known-good data
-5. **Track in Excel** — Use the `generate_test_cases.py` tool to produce the tracking workbook with P0/P1 priorities and Pass/Fail/Partial status columns
+This section explains the full QA process from start to finish. Any team member can follow this guide independently.
+
+---
+
+### The Core Pattern (applies to every layer)
+
+Every test in this project follows the same 4-step pattern:
+
+```
+Step 1          Step 2               Step 3                  Step 4
+Input files  →  Run real code    →   Compare to expected  →  Report with metrics
+(datasets/)     (actual system)      (datasets/expected/)    (results/)
+```
+
+The only thing that changes between layers is what the input is and what "expected" means. The pattern is always the same.
+
+---
+
+### Folder Structure — What Goes Where
+
+```
+testing/
+├── datasets/
+│   ├── html/          ← saved HTML pages from HDB, URA, IRAS, MAS, CPF
+│   ├── pdfs/          ← downloaded PDFs from same sources
+│   ├── queries/       ← queries.json (real user questions)
+│   └── expected/      ← one JSON per HTML/PDF + expected_answers.json
+├── kb-pipeline/       ← Python test files, one subfolder per layer
+│   ├── html-extraction/
+│   ├── pdf-extraction/
+│   ├── metadata-extraction/
+│   ├── table-extraction/
+│   ├── chunking/
+│   ├── embedding/
+│   ├── api-retrieval/
+│   └── pipeline-resilience/
+├── agent/             ← Python test files for agent layers
+│   ├── e2e/
+│   ├── graph-agents/
+│   ├── mcp-tools/
+│   └── performance/
+├── results/           ← auto-generated metric reports (created when tests run)
+├── QA_METRICS.md      ← this file
+└── Testing.xlsx       ← human-readable test tracker (P0/P1 priorities, Pass/Fail status)
+```
+
+---
+
+### Step 1 — Collect Test Data (HTML pages and PDFs)
+
+Before any test can run, you need real sample files from the 5 government sources. Save these into `testing/datasets/html/` and `testing/datasets/pdfs/`.
+
+**How to save an HTML page:**
+Open the page in Chrome → Right-click anywhere → **Save As** → choose **"Webpage, HTML Only"** (NOT "Complete"). Name the file as shown below.
+
+**How to save a PDF:**
+Click the PDF link on the site → it opens in the browser → click the download icon in the top-right corner → save with the filename shown below.
+
+---
+
+#### HDB — `datasets/html/` and `datasets/pdfs/`
+
+| What to save | URL | Filename |
+|---|---|---|
+| Eligibility page (has income ceiling tables) | `hdb.gov.sg/buying-a-flat/understanding-your-eligibility-and-housing-loan-options/flat-and-grant-eligibility` | `hdb_eligibility.html` |
+| BTO application process | `hdb.gov.sg/buying-a-flat/buying-procedure-for-new-flats/application` | `hdb_bto_application.html` |
+| Rental eligibility | `hdb.gov.sg/residential/renting-a-flat/renting-from-hdb/public-rental-scheme/eligibility` | `hdb_rental_eligibility.html` |
+| Any PDF from eligibility page with income tables | Link found on eligibility page above | `hdb_income_ceiling_guide.pdf` |
+
+> HDB uses JavaScript rendering. Wait 3–5 seconds after the page fully loads before saving.
+
+---
+
+#### IRAS — `datasets/html/` and `datasets/pdfs/`
+
+| What to save | URL | Filename |
+|---|---|---|
+| ABSD rates page (best table test) | `iras.gov.sg/taxes/stamp-duty/for-property/buying-or-acquiring-property/additional-buyer-s-stamp-duty-(absd)` | `iras_absd.html` |
+| Property tax rates page | `iras.gov.sg/taxes/property-tax/other-services/property-tax-rates` | `iras_property_tax_rates.html` |
+| e-Tax Guide PDF (look for "e-Tax Guide" link on ABSD page) | Link found on ABSD page above | `iras_absd_guide.pdf` |
+
+---
+
+#### URA — `datasets/html/`
+
+| What to save | URL | Filename |
+|---|---|---|
+| Buying private residential property | `ura.gov.sg/Corporate/Property/Residential/buying-private-residential-property` | `ura_private_residential.html` |
+| Development guidelines | `ura.gov.sg/Corporate/Guidelines/Development-Control/Residential/Flats-Condominiums` | `ura_guidelines.html` |
+
+---
+
+#### MAS — `datasets/html/`
+
+| What to save | URL | Filename |
+|---|---|---|
+| TDSR rules page | Find under `mas.gov.sg/regulations-and-financial-stability` — search "Total Debt Servicing" | `mas_tdsr.html` |
+| LTV limits page | Find under same section — search "Loan-to-Value" | `mas_ltv.html` |
+
+> MAS uses JavaScript rendering. Wait 3–5 seconds after the page fully loads before saving.
+
+---
+
+#### CPF — `datasets/html/`
+
+| What to save | URL | Filename |
+|---|---|---|
+| Using CPF to buy a home | `cpf.gov.sg/member/home-ownership/using-your-cpf-to-buy-a-home` | `cpf_home_ownership.html` |
+| CPF housing scheme | `cpf.gov.sg/member/home-ownership/housing-scheme` | `cpf_housing_scheme.html` |
+
+> CPF is a React app. Wait for the spinner to disappear and the full page content to appear before saving.
+
+---
+
+### Step 2 — Create Expected Results
+
+For each HTML/PDF file you saved, you need a matching JSON file in `testing/datasets/expected/` that describes what the correct output should be. The test compares the extractor's output against this file.
+
+#### Option A — Using AI (recommended)
+
+1. Open the saved HTML file in VS Code (or any text editor)
+2. Select all (Ctrl+A) and copy
+3. Paste it to Claude with this prompt:
+
+> *"Here is the raw HTML of the [source] [page name] page. Generate the expected JSON test file. Include: metadata fields (title, section, source, domain_tags), content_must_contain (5–10 key policy phrases), content_must_not_contain (nav/footer/cookie text you can see in the HTML), and tables (extract all table rows and columns exactly as they appear)."*
+
+4. Claude generates the JSON — save it as `testing/datasets/expected/<filename>.json`
+
+Example: `iras_absd.html` → paste to Claude → save output as `expected/iras_absd.json`
+
+#### Option B — Via Excel (for non-technical team members)
+
+1. Open `Testing.xlsx`
+2. Find the relevant test row for that page
+3. Fill in the **Expected Result** column in plain English
+4. A developer runs `generate_expected_json.py` once to convert Excel → JSON automatically
+
+**Non-technical members never need to touch a JSON file.** Excel is the source of truth; JSON is auto-generated from it.
+
+#### What the expected JSON looks like
+
+```json
+{
+  "source": "iras",
+  "url": "https://www.iras.gov.sg/taxes/stamp-duty/.../absd",
+  "metadata": {
+    "title": "Additional Buyer's Stamp Duty (ABSD)",
+    "section": "Stamp Duty",
+    "source": "iras",
+    "domain_tags": ["stamp_duty", "residential", "absd"]
+  },
+  "content_must_contain": [
+    "Additional Buyer's Stamp Duty",
+    "Singapore Citizen",
+    "Permanent Resident",
+    "20%"
+  ],
+  "content_must_not_contain": [
+    "Privacy Policy",
+    "Cookie Settings",
+    "© Copyright"
+  ],
+  "tables": [
+    {
+      "description": "ABSD rates by buyer profile",
+      "headers": ["Profile", "1st Property", "2nd Property", "3rd & subsequent"],
+      "rows": [
+        ["Singapore Citizen", "0%", "20%", "30%"],
+        ["Singapore PR", "5%", "30%", "35%"],
+        ["Foreigner", "60%", "60%", "60%"]
+      ]
+    }
+  ]
+}
+```
+
+| Field | What the test checks |
+|---|---|
+| `metadata` | All required fields are present and correct |
+| `content_must_contain` | These key phrases appear in extracted text |
+| `content_must_not_contain` | Nav/footer noise did NOT leak into content |
+| `tables` | Table rows and columns match exactly |
+
+#### Expected files summary
+
+```
+datasets/expected/
+├── hdb_eligibility.json
+├── hdb_bto_application.json
+├── iras_absd.json
+├── iras_property_tax_rates.json
+├── ura_private_residential.json
+├── mas_tdsr.json
+├── cpf_home_ownership.json
+└── expected_answers.json     ← for retrieval/agent tests (see Step 2b)
+```
+
+#### Step 2b — Create queries and expected answers
+
+Create `testing/datasets/queries/queries.json` with real user questions:
+
+```json
+[
+  {"id": "Q01", "query": "Am I eligible to buy a BTO flat as a Singapore PR?", "source": "hdb", "topic": "eligibility"},
+  {"id": "Q02", "query": "What is the ABSD rate for a second property purchase by a Singapore citizen?", "source": "iras", "topic": "stamp_duty"},
+  {"id": "Q03", "query": "How much CPF can I use to pay for my HDB flat?", "source": "cpf", "topic": "withdrawal"},
+  {"id": "Q04", "query": "What is the TDSR limit for a housing loan in Singapore?", "source": "mas", "topic": "loan_limits"},
+  {"id": "Q05", "query": "Can foreigners buy private property in Singapore?", "source": "ura", "topic": "private_property"},
+  {"id": "Q06", "query": "What is the income ceiling for a 4-room BTO flat?", "source": "hdb", "topic": "eligibility"},
+  {"id": "Q07", "query": "What are the property tax rates for owner-occupied residential properties?", "source": "iras", "topic": "property_tax"},
+  {"id": "Q08", "query": "What is the minimum occupation period for an HDB flat before I can sell?", "source": "hdb", "topic": "resale_rules"},
+  {"id": "Q09", "query": "What is the LTV limit for a second housing loan?", "source": "mas", "topic": "ltv"},
+  {"id": "Q10", "query": "How does the CPF accrued interest work when I sell my flat?", "source": "cpf", "topic": "accrued_interest"}
+]
+```
+
+For `expected_answers.json` — paste each query + its source HTML page to Claude and ask for the correct answer keywords. Save the result as `testing/datasets/expected/expected_answers.json`.
+
+---
+
+### Step 3 — Run Tests Layer by Layer
+
+Run tests in this order. Each layer depends on the one before it working correctly.
+
+| Order | Layer | Test folder | Command |
+|---|---|---|---|
+| 1 | HTML Extraction | `kb-pipeline/html-extraction/` | `python test_html_extractor.py` |
+| 2 | PDF Extraction | `kb-pipeline/pdf-extraction/` | `python test_pdf_extractor.py` |
+| 3 | Metadata Extraction | `kb-pipeline/metadata-extraction/` | `python test_metadata_extractor.py` |
+| 4 | Table Extraction | `kb-pipeline/table-extraction/` | `python test_table_extractor.py` |
+| 5 | Chunking | `kb-pipeline/chunking/` | `python test_chunker.py` |
+| 6 | Embedding | `kb-pipeline/embedding/` | `python test_embedder.py` |
+| 7 | API Retrieval | `kb-pipeline/api-retrieval/` | `python test_retrieval.py` |
+| 8 | Agent E2E | `agent/e2e/` | `python test_agent_e2e.py` |
+
+Each test writes its report to `testing/results/`. For example, after running HTML extraction tests you will see `testing/results/html_extraction_report.json`.
+
+> **Note:** Steps 6–8 require the system to be running (Pinecone configured, API keys set, KB-Pipeline and Agent services up). Steps 1–5 run fully offline against local files only.
+
+---
+
+### Step 4 — Read the Results
+
+Each test produces console output AND a JSON report in `testing/results/`.
+
+**Console output looks like this:**
+
+```
+HTML Extraction — IRAS
+  ✅ Parsing Success:        1/1    (100%) — target >99%   PASS
+  ✅ Metadata Completeness:  19/20  (95%)  — target >95%   PASS
+  ✅ Data Type Correctness:  20/20  (100%) — target >99%   PASS
+  ❌ Precision:              17/20  (85%)  — target >90%   FAILED
+
+HTML Extraction — CPF
+  ✅ Parsing Success:        1/1    (100%) — target >99%   PASS
+  ❌ Metadata Completeness:  14/20  (70%)  — target >95%   FAILED
+```
+
+**A red line tells you exactly:**
+- Which source failed (IRAS, HDB, CPF, etc.)
+- Which metric failed (Precision, Metadata Completeness, etc.)
+- The actual score vs. the target
+
+**What to do when a test fails:**
+1. Note the source name and metric name from the red line
+2. Find that metric's "How to compute it" section in this document
+3. Check the extractor code for that source in `KB-Pipeline/processors/`
+4. Fix the code, re-run the test, confirm it goes green
+
+**Summary report:**
+After running all layers, open `testing/results/summary_report.json` — it shows every metric for every layer in one place with pass/fail status. This is what gets reviewed in team standups.
+
+---
+
+### Embedding Layer — Special Case (no expected file needed)
+
+Embedding tests work differently from all other layers. You cannot write down what a 3072-dimensional vector "should" look like — it is meaningless to a human. So embedding tests check **process quality only**:
+
+| What is checked | Why | Target |
+|---|---|---|
+| Did the API call succeed? | A failed call = chunk invisible in search | < 1% error rate |
+| Was it under 2 seconds? | Slow embedding = growing backlog | < 2s per chunk (P95) |
+| Was the vector stored in Pinecone? | Upsert failure = chunk never retrievable | 100% upsert success |
+| Is the vector 3072 dimensions? | Wrong dimension = wrong model used | Exactly 3072 |
+| Same chunk → same vector each time? | Inconsistency = non-deterministic search | Cosine similarity > 0.999 |
+
+No `expected/embedding.json` file is needed. The test passes if the process completes correctly within the latency target.
+
+---
+
+### Ground Truth Maintenance
+
+Government policy pages change. When IRAS updates ABSD rates or HDB changes income ceilings, the expected JSON files must be updated to match.
+
+**When you see test failures after a known policy change:**
+
+1. Re-save the HTML page from the live site (same filename, overwrite the old one)
+2. Paste the new HTML to Claude and regenerate the expected JSON
+3. Save over the old `expected/<source>_<page>.json`
+4. Update the "Expected Result" column in `Testing.xlsx` for the affected rows
+5. Re-run the tests — they should go green with the updated ground truth
+
+**When you see unexpected failures (no known policy change):**
+The website likely changed its HTML structure (CSS class renamed, new layout). Check the extractor's CSS selectors in `KB-Pipeline/processors/html_extractor.py` and update them to match the new structure.
+
+---
+
+### Quick Reference — What Each Layer Needs
+
+| Layer | Needs files in datasets/? | Needs expected JSON? | Needs system running? |
+|---|---|---|---|
+| HTML Extraction | Yes — `datasets/html/` | Yes — per HTML file | No — offline |
+| PDF Extraction | Yes — `datasets/pdfs/` | Yes — per PDF file | No — offline |
+| Metadata Extraction | Yes — same HTML/PDF files | Yes — same JSON (metadata section) | No — offline |
+| Table Extraction | Yes — same HTML/PDF files | Yes — same JSON (tables section) | No — offline |
+| Chunking | No — chains from HTML/PDF step | Yes — expected_chunks in JSON | No — offline |
+| Embedding | No — chains from chunking | No — process checks only | Yes — API keys + Pinecone |
+| API Retrieval | Yes — `datasets/queries/queries.json` | Yes — `expected_answers.json` | Yes — KB-Pipeline API running |
+| Agent E2E | Yes — same `queries.json` | Yes — same `expected_answers.json` | Yes — full stack running |
