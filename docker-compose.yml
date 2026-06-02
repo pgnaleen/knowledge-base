@@ -235,7 +235,7 @@ services:
         VITE_API_BASE_URL: http://localhost:8001   # browser talks to host port 8001
     container_name: sg-property-frontend
     ports:
-      - "3000:80"
+      - "3001:80"
     depends_on:
       - backend
     restart: unless-stopped
@@ -254,6 +254,28 @@ services:
       - backend
     restart: on-failure
 
+
+
+
+
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./KB-Pipeline/grafana/data:/var/lib/grafana
+      - ./KB-Pipeline/grafana/provisioning:/etc/grafana/provisioning
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    depends_on:
+      - postgres
+
+
+
 volumes:
   postgres_data:
   minio_data:
+  grafana_data:
