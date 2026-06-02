@@ -76,9 +76,8 @@ docker compose up --build -d
 **⚠️ Important**: After starting, run the KB-Pipeline database setup:
 
 ```bash
-# Apply database migrations and seed sources
+# Apply database migrations (creates tables + seeds all 5 sources)
 docker exec sg-property-kb-app alembic upgrade head
-docker exec sg-property-kb-app python -m config.sync_sources
 ```
 
 (This is automatic if you ran the setup script, but required if you started with `docker compose up`.)
@@ -92,18 +91,362 @@ Services will be available at:
 | KB Retrieval API | http://localhost:8000/docs | Knowledge base API |
 | MinIO Console | http://localhost:9001 | Object storage admin (user: `minioadmin`, pass: `minioadmin`) |
 
-### 5. Check Logs
+### 5. Verify Setup
+
+Check all services are running:
 
 ```bash
-docker compose logs -f backend   # Follow backend logs
-docker compose logs -f kb-api    # Follow KB API logs
+docker compose ps
 ```
 
-### 6. Stop Services
+You should see 11 services: postgres, redis, minio, minio-init, kb-app, kb-api, kb-worker, kb-beat, mcp-server, backend, frontend.
+
+### 6. Check Logs
+
+See [Checking Logs](#checking-logs) section below for detailed logging instructions.
+
+### 7. Stop Services
 
 ```bash
 docker compose down
 ```
+
+## API Reference
+
+### KB-Pipeline API — Knowledge Base Retrieval & Crawl Management
+
+**Base URL**: `http://localhost:8000`  
+**Swagger UI**: `http://localhost:8000/docs`
+
+#### GET /health
+Liveness check.
+
+```bash
+curl http://localhost:8000/health
+```
+
+Response: `{"status": "ok"}`
+
+---
+
+#### POST /crawl
+Queue a crawl task for a source (async — returns immediately with task_id).
+
+**Example Request (Postman):**
+```json
+POST http://localhost:8000/crawl
+Content-Type: application/json
+
+{
+  "source_code": "hdb",
+  "job_type": "incremental",
+  "page_limit": 10
+}
+```
+
+**Parameters:**
+- `source_code` (str): `hdb`, `ura`, `iras`, `mas`, or `cpf`
+- `job_type` (str, optional): `"full"` or `"incremental"` (default: `"incremental"`)
+- `page_limit` (int, optional): Max pages to crawl (useful for testing)
+
+**Response (202 Accepted):**
+```json
+{
+  "task_id": "crawl-hdb-1234567890",
+  "status": "pending",
+  "source_code": "hdb",
+  "job_type": "incremental"
+}
+```
+
+---
+
+#### GET /jobs
+Get task execution history with optional filters.
+
+**Example Request (Postman):**
+```
+GET http://localhost:8000/jobs?source=hdb&status=running&limit=5&offset=0
+```
+
+**Query Parameters:**
+- `source` (str, optional): Filter by source code (`hdb`, `ura`, `iras`, `mas`, `cpf`)
+- `status` (str, optional): Filter by status (`pending`, `started`, `success`, `failed`, `retry`)
+- `limit` (int, optional): Results per page (default: 20)
+- `offset` (int, optional): Pagination offset (default: 0)
+
+**Response (200 OK):**
+```json
+{
+  "jobs": [
+    {
+      "task_id": "crawl-hdb-1234567890",
+      "task_name": "crawl",
+      "source_code": "hdb",
+      "status": "success",
+      "started_at": "2026-06-02T10:15:30Z",
+      "completed_at": "2026-06-02T10:25:45Z",
+      "result_summary": {
+        "pages_found": 45,
+        "pages_new": 12,
+        "pages_changed": 5,
+        "documents_created": 12,
+        "documents_updated": 5
+      },
+      "logs": "[2026-06-02 10:15:30] Starting crawl for hdb...\n[2026-06-02 10:25:45] Crawl completed.",
+      "error_message": null
+    }
+  ],
+  "total": 1
+}
+```
+
+**Key Fields:**
+- `task_id`: Unique task identifier (reference in logs)
+- `status`: Current task status
+- `result_summary`: Statistics from the completed task (crawl counts, pages found, etc.)
+- `logs`: Full structured log output captured during task execution
+- `error_message`: Error details if status is `failed`
+
+---
+
+#### POST /process
+Queue a task to extract and chunk all raw documents pending processing.
+
+**Example Request:**
+```bash
+curl -X POST http://localhost:8000/process
+```
+
+**Response (202 Accepted):**
+```json
+{
+  "task_id": "process-1234567890",
+  "status": "pending"
+}
+```
+
+---
+
+#### POST /embed
+Queue a task to embed all unembedded chunks into Pinecone and pgvector.
+
+**Example Request:**
+```bash
+curl -X POST http://localhost:8000/embed
+```
+
+**Response (202 Accepted):**
+```json
+{
+  "task_id": "embed-1234567890",
+  "status": "pending"
+}
+```
+
+---
+
+#### POST /retrieve
+Semantic search across the knowledge base (hybrid vector + BM25).
+
+**Example Request (Postman):**
+```json
+POST http://localhost:8000/retrieve
+Content-Type: application/json
+
+{
+  "query": "What is ABSD for a PR buying a condo?",
+  "top_k": 5,
+  "search_mode": "hybrid",
+  "filters": {
+    "source": ["iras"],
+    "property_type": ["condo"],
+    "citizenship_type": ["PR"]
+  }
+}
+```
+
+**Parameters:**
+- `query` (str, required): Search query
+- `top_k` (int, optional): Number of results (default: 5, max: 50)
+- `search_mode` (str, optional): `"vector"` or `"hybrid"` (default: `"hybrid"`)
+- `filters` (object, optional): Filter results by source, property_type, citizenship_type (all arrays)
+
+**Response (200 OK):**
+```json
+{
+  "query": "What is ABSD for a PR buying a condo?",
+  "results": [
+    {
+      "text": "The Additional Buyer's Stamp Duty (ABSD) is levied on buyers who acquire residential properties in Singapore. For permanent residents (PRs), the ABSD rate is 5% of the property value...",
+      "score": 0.92,
+      "source_name": "iras",
+      "source_url": "https://iras.gov.sg/...",
+      "title": "ABSD Rates for PRs",
+      "section": "Residential Properties",
+      "chunk_index": 3,
+      "property_types": ["condo", "hdb"],
+      "citizenship_types": ["PR"]
+    }
+  ],
+  "total": 1,
+  "latency_ms": 45,
+  "store_used": "pinecone"
+}
+```
+
+---
+
+### SG Property Agent API — Conversational AI Backend
+
+**Base URL**: `http://localhost:8001`  
+**Swagger UI**: `http://localhost:8001/docs`
+
+#### GET /health
+Liveness check.
+
+```bash
+curl http://localhost:8001/health
+```
+
+Response: `{"status": "ok"}`
+
+---
+
+#### POST /chat
+Send a question and receive a streamed answer (Server-Sent Events).
+
+**Example Request (Postman):**
+```json
+POST http://localhost:8001/chat
+Content-Type: application/json
+
+{
+  "question": "What is ABSD for a PR buying a condo?",
+  "thread_id": "user-session-123"
+}
+```
+
+**Parameters:**
+- `question` (str, required): User's question (1–2000 characters)
+- `thread_id` (str, optional): Conversation session ID. If omitted, a new UUID is generated. Use the same `thread_id` for multi-turn conversations.
+
+**Response (200 OK, text/event-stream):**
+```
+data: {"type": "token", "content": "The"}
+data: {"type": "token", "content": " ABSD"}
+data: {"type": "token", "content": " for"}
+...
+data: {"type": "done"}
+```
+
+Each line is a JSON object:
+- `{"type": "token", "content": "..."}` — a chunk of the response
+- `{"type": "done"}` — end of stream
+- `{"type": "error", "text": "..."}` — error occurred
+
+**Note**: Use `text/event-stream` content-type when consuming in client code.
+
+---
+
+#### POST /reset
+Clear conversation memory for a session.
+
+**Example Request (Postman):**
+```json
+POST http://localhost:8001/reset
+Content-Type: application/json
+
+{
+  "thread_id": "user-session-123"
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "status": "ok",
+  "thread_id": "user-session-123"
+}
+```
+
+---
+
+## Checking Logs
+
+All logs are streamed to stdout via structlog. Docker captures them with its default json-file logging driver.
+
+### View Logs for All Services
+
+```bash
+# Follow all services in real-time
+docker compose logs -f
+
+# View last 50 lines of all services
+docker compose logs --tail=50
+```
+
+### View Logs for Specific Services
+
+```bash
+# KB-Pipeline API (REST endpoints)
+docker compose logs -f kb-api
+
+# Celery Worker (runs crawl, process, embed tasks)
+docker compose logs -f kb-worker
+
+# Celery Beat Scheduler (runs scheduled jobs)
+docker compose logs -f kb-beat
+
+# SG Property Agent Backend (chat API)
+docker compose logs -f backend
+
+# React Frontend
+docker compose logs -f frontend
+
+# View last 100 lines only
+docker compose logs --tail=100 kb-worker
+```
+
+### How to Check Logs for API-Triggered Tasks
+
+**Scenario**: You triggered a crawl via Postman (`POST /crawl`) and got back a `task_id`. Where are the logs?
+
+1. **Real-time task logs** — Task execution runs on the **Celery worker**, not the API:
+   ```bash
+   docker compose logs -f kb-worker
+   ```
+   Watch this terminal while the task is running. You'll see structured logs with the task name, source, pages found, etc.
+
+2. **Task history** — After the task completes, retrieve its full log via the API:
+   ```bash
+   curl "http://localhost:8000/jobs?source=hdb&limit=5"
+   ```
+   Each job record contains:
+   - `logs` field — full structured log output captured during execution
+   - `result_summary` — statistics (pages found, documents created, etc.)
+   - `error_message` — error details if the task failed
+
+3. **Comparison: CLI vs API**
+   - **CLI method** (direct, logs in your terminal):
+     ```bash
+     docker exec sg-property-kb-worker python run_pipeline.py --crawl-only hdb -S CLOSESPIDER_PAGECOUNT=10
+     ```
+   - **API/Postman method** (async, check logs via `/jobs`):
+     ```bash
+     # 1. Trigger crawl
+     curl -X POST http://localhost:8000/crawl \
+       -H "Content-Type: application/json" \
+       -d '{"source_code": "hdb", "page_limit": 10}'
+     
+     # 2. Watch worker logs
+     docker compose logs -f kb-worker
+     
+     # 3. Check final status + logs
+     curl "http://localhost:8000/jobs?source=hdb&limit=1"
+     ```
+
+---
 
 ## Environment Variables Reference
 

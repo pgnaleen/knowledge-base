@@ -1,7 +1,10 @@
 import boto3
 from config.database import SessionLocal
-from config.models import RawDocument, ProcessedChunk, CrawlJob
+from config.models import RawDocument, ProcessedChunk, CrawlJob, TaskExecution
 from config.settings import settings
+from embedders.pinecone_store import PineconeStore
+
+PINECONE_NAMESPACES = ["hdb", "ura", "iras", "mas", "cpf", "all"]
 
 
 def clean_database():
@@ -10,14 +13,26 @@ def clean_database():
     try:
         deleted_chunks = db.query(ProcessedChunk).delete()
         deleted_docs = db.query(RawDocument).delete()
-        deleted_crawals = db.query(CrawlJob).delete()
+        deleted_crawls = db.query(CrawlJob).delete()
+        deleted_tasks = db.query(TaskExecution).delete()
         db.commit()
-        print(f"Deleted {deleted_chunks} chunks, {deleted_docs} documents, and {deleted_crawals} crawl jobs from PostgreSQL.")
+        print(f"Deleted {deleted_chunks} chunks, {deleted_docs} documents, {deleted_crawls} crawl jobs, and {deleted_tasks} task executions from PostgreSQL.")
     except Exception as e:
         print(f"Error cleaning database: {e}")
         db.rollback()
     finally:
         db.close()
+
+
+def clean_pinecone():
+    print("Cleaning Pinecone vector store...")
+    try:
+        store = PineconeStore()
+        for namespace in PINECONE_NAMESPACES:
+            store.delete_all_in_namespace(namespace)
+            print(f"Purged all vectors from Pinecone namespace '{namespace}'.")
+    except Exception as e:
+        print(f"Error cleaning Pinecone: {e}")
 
 
 def clean_minio():
@@ -47,5 +62,6 @@ def clean_minio():
 if __name__ == "__main__":
     print("Starting data cleanup...")
     clean_database()
+    clean_pinecone()
     clean_minio()
     print("Cleanup complete!")
