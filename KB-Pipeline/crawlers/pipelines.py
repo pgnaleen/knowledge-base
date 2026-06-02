@@ -2,6 +2,7 @@ import hashlib
 import re
 
 from scrapy.exceptions import DropItem
+from sqlalchemy import func
 
 from config.database import SessionLocal
 from config.logger import get_logger
@@ -59,6 +60,14 @@ class S3Pipeline:
 
     def process_item(self, item):
         try:
+            logger.info(
+                "pipeline.s3_item_started",
+                source=item.get("source_code"),
+                url=item.get("url"),
+                content_type=item.get("content_type"),
+                has_html=bool(item.get("raw_html")),
+                has_pdf=bool(item.get("raw_pdf")),
+            )
             url_hash = hashlib.md5(item["url"].encode()).hexdigest()[:12]
             html_extractor = HTMLExtractor()
             pdf_extractor = PDFExtractor()
@@ -70,12 +79,19 @@ class S3Pipeline:
                     item["raw_html"].decode("utf-8", errors="replace"),
                 )
                 item["s3_path"] = key
+                logger.info(
+                    "pipeline.raw_html_uploaded",
+                    source=item.get("source_code"),
+                    url=item.get("url"),
+                    s3_path=key,
+                )
 
                 try:
                     extracted = html_extractor.extract(
                         item["raw_html"],
                         source_url=item.get("url", ""),
                         source_name=item.get("source_code", ""),
+                        content_selectors=item.get("content_selectors") or [],
                     )
                     text_with_tables = _merge_tables_into_text(extracted.text, extracted.tables)
                     item["raw_text"] = _sanitize_text(text_with_tables.strip())
@@ -104,6 +120,12 @@ class S3Pipeline:
             if item.get("raw_pdf"):
                 key = upload_raw_pdf(item["source_code"], url_hash, item["raw_pdf"])
                 item["s3_path"] = key
+                logger.info(
+                    "pipeline.raw_pdf_uploaded",
+                    source=item.get("source_code"),
+                    url=item.get("url"),
+                    s3_path=key,
+                )
 
                 try:
                     extracted = pdf_extractor.extract(
@@ -156,6 +178,15 @@ class S3Pipeline:
                         "table_count": 0,
                     }
 
+            logger.info(
+                "pipeline.s3_item_completed",
+                source=item.get("source_code"),
+                url=item.get("url"),
+                s3_path=item.get("s3_path"),
+                content_hash=(item.get("content_hash") or "")[:12],
+                raw_text_length=len(item.get("raw_text") or ""),
+                needs_ocr=item.get("needs_ocr", False),
+            )
             return item
         except Exception as e:
             logger.error("s3.error", url=item.get("url"), error=str(e))
@@ -173,20 +204,35 @@ class PostgresPipeline:
         self.seen_urls = set()
         self.source_id = None
 
-    def open_spider(self):
+    def open_spider(self, spider=None):
         self.db = SessionLocal()
+        logger.info("pipeline.postgres_opened", spider=spider.name if spider else None)
 
-    def close_spider(self):
+    def close_spider(self, spider=None):
         if self.db and self.source_id:
             pages_deleted = self._mark_deleted_pages()
             if self.stats:
                 self.stats.inc_value("pages_deleted", pages_deleted)
+            logger.info(
+                "pipeline.postgres_deleted_marked",
+                spider=spider.name if spider else None,
+                source_id=str(self.source_id),
+                pages_deleted=pages_deleted,
+            )
+        logger.info("pipeline.postgres_closed", spider=spider.name if spider else None)
         self.db.close()
 
     def process_item(self, item):
         try:
+            logger.info(
+                "pipeline.postgres_item_started",
+                source=item.get("source_code"),
+                url=item.get("url"),
+                content_hash=(item.get("content_hash") or "")[:12],
+            )
             source = self.db.query(Source).filter_by(code=item["source_code"]).first()
             if not source:
+                logger.error("pipeline.source_not_found", source=item.get("source_code"), url=item.get("url"))
                 raise DropItem(f"Source {item['source_code']} not found in DB")
 
             self.source_id = source.id
@@ -220,6 +266,12 @@ class PostgresPipeline:
                         logger.warning("s3.dup_delete_failed", url=item["url"], s3_path=s3_path, error=str(e))
                 if self.stats:
                     self.stats.inc_value("pages_skipped_dup")
+                logger.info(
+                    "pipeline.postgres_item_completed",
+                    source=item["source_code"],
+                    url=item["url"],
+                    action="skipped_duplicate",
+                )
                 return item
 
             # Step 2: URL-level change detection
@@ -241,12 +293,24 @@ class PostgresPipeline:
                     if self.stats:
                         self.stats.inc_value("pages_changed")
                     logger.info("page.updated", url=item["url"], source=item["source_code"], old_hash=old_hash[:12], new_hash=content_hash[:12])
+                    logger.info(
+                        "pipeline.postgres_item_completed",
+                        source=item["source_code"],
+                        url=item["url"],
+                        action="updated",
+                    )
                 else:
                     logger.info("page.unchanged", url=item["url"], source=item["source_code"], hash=content_hash[:12])
                     existing.last_seen_at = func.now()  # Explicitly update liveness timestamp
                     self.db.commit()
                     if self.stats:
                         self.stats.inc_value("pages_unchanged")
+                    logger.info(
+                        "pipeline.postgres_item_completed",
+                        source=item["source_code"],
+                        url=item["url"],
+                        action="unchanged",
+                    )
             else:
                 doc = RawDocument(
                     source_id=source.id,
@@ -265,6 +329,13 @@ class PostgresPipeline:
                     self.stats.inc_value("pages_new")
                 word_count = len(item.get("raw_text", "").split())
                 logger.info("page.created", url=item["url"], source=item["source_code"], hash=content_hash[:12], word_count=word_count)
+                logger.info(
+                    "pipeline.postgres_item_completed",
+                    source=item["source_code"],
+                    url=item["url"],
+                    action="created",
+                    word_count=word_count,
+                )
 
             return item
         except DropItem:

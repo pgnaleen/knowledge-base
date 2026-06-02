@@ -13,6 +13,12 @@ logger = structlog.get_logger(__name__)
 
 def _create_task_execution(task_id: str, task_name: str, source_code: str | None = None) -> TaskExecution:
     """Create a TaskExecution record in the database."""
+    logger.info(
+        "task_execution.create_started",
+        task_id=task_id,
+        task_name=task_name,
+        source=source_code,
+    )
     with Session(engine) as session:
         execution = TaskExecution(
             id=task_id,
@@ -25,6 +31,12 @@ def _create_task_execution(task_id: str, task_name: str, source_code: str | None
         )
         session.add(execution)
         session.commit()
+        logger.info(
+            "task_execution.created",
+            task_id=task_id,
+            task_name=task_name,
+            source=source_code,
+        )
         return execution
 
 
@@ -36,6 +48,14 @@ def _update_task_execution(
     error_message: str | None = None,
 ) -> None:
     """Update a TaskExecution record with results."""
+    logger.info(
+        "task_execution.update_started",
+        task_id=task_id,
+        status=status,
+        has_result_summary=result_summary is not None,
+        has_logs=logs is not None,
+        has_error=error_message is not None,
+    )
     with Session(engine) as session:
         execution = session.query(TaskExecution).filter(TaskExecution.id == task_id).first()
         if execution:
@@ -48,6 +68,9 @@ def _update_task_execution(
             if error_message is not None:
                 execution.error_message = error_message
             session.commit()
+            logger.info("task_execution.updated", task_id=task_id, status=status)
+        else:
+            logger.warning("task_execution.not_found", task_id=task_id, status=status)
 
 
 @app.task(bind=True, max_retries=3)
@@ -63,12 +86,17 @@ def run_source_pipeline_task(
     """
     task_id = self.request.id
     log = logger.bind(source=source_code, job_type=job_type, task_id=task_id)
-    log.info("task.pipeline_started")
+    log.info(
+        "task.pipeline_started",
+        retries=self.request.retries,
+        scrapy_settings=scrapy_settings or {},
+    )
 
     # Create task execution record
     _create_task_execution(task_id, "crawl", source_code)
 
     try:
+        log.info("task.pipeline_calling_run_full_pipeline")
         run_full_pipeline(
             source_codes=[source_code],
             job_type=job_type,

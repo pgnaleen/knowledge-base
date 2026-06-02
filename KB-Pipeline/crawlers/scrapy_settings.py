@@ -25,7 +25,7 @@ RETRY_BACKOFF_ENABLED = True
 RETRY_BACKOFF_MAX = 60
 
 PLAYWRIGHT_BROWSER_TYPE = "chromium"
-PLAYWRIGHT_LAUNCH_OPTIONS = {"headless": True, "args": ["--no-sandbox"]}
+PLAYWRIGHT_LAUNCH_OPTIONS = {"headless": True, "args": ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]}
 PLAYWRIGHT_DEFAULT_NAVIGATION_TIMEOUT = 60_000
 PLAYWRIGHT_MAX_PAGES_IN_PARALLEL = 4
 

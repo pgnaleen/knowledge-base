@@ -41,6 +41,42 @@ from graph.knowledge_advisory_agent import run_knowledge_advisory
 from graph.orchestrator import orchestrate
 from graph.state import GraphState
 
+# ── Routing functions ─────────────────────────────────────────────────────────
+# These are evaluated by LangGraph when validating edges. Command(goto=...) in
+# each node handles the actual runtime routing, but these must return valid string
+# keys (not the state dict) to avoid TypeError: unhashable type: 'dict'.
+
+def _route_from_orchestrator(state: GraphState) -> str:
+    # Mirrors orchestrate() Pass 2 check: all planned agents done → synthesis → END
+    agent_plan = state.get("agent_plan") or []
+    completed = state.get("completed_agents") or []
+    if agent_plan and set(completed) >= set(agent_plan):
+        return END
+
+    intent = state.get("intent", "advisory")
+    if intent == "chitchat":
+        return END
+    return {
+        "eligibility":           "eligibility_agent",
+        "financial":             "financial_agent",
+        "advisory":              "knowledge_advisory_agent",
+        "eligibility_financial": "eligibility_agent",
+        "full":                  "eligibility_agent",
+    }.get(intent, "knowledge_advisory_agent")
+
+
+def _route_from_eligibility(state: GraphState) -> str:
+    return "orchestrator" if state.get("eligibility_result") else END
+
+
+def _route_from_financial(state: GraphState) -> str:
+    return "orchestrator" if state.get("financial_result") else END
+
+
+def _route_from_knowledge_advisory(state: GraphState) -> str:
+    return "orchestrator" if state.get("advisory_result") else END
+
+
 # ── Graph assembly ────────────────────────────────────────────────────────────
 
 _builder = StateGraph(GraphState)
@@ -59,7 +95,7 @@ _builder.set_entry_point("orchestrator")
 # Orchestrator routes to any specialist or END (chitchat + synthesis both end here)
 _builder.add_conditional_edges(
     "orchestrator",
-    lambda state: state,
+    _route_from_orchestrator,
     {
         "eligibility_agent":        "eligibility_agent",
         "financial_agent":          "financial_agent",
@@ -72,19 +108,19 @@ _builder.add_conditional_edges(
 # or go to END (when asking the user for missing information)
 _builder.add_conditional_edges(
     "eligibility_agent",
-    lambda state: state,
+    _route_from_eligibility,
     {"orchestrator": "orchestrator", END: END},
 )
 
 _builder.add_conditional_edges(
     "financial_agent",
-    lambda state: state,
+    _route_from_financial,
     {"orchestrator": "orchestrator", END: END},
 )
 
 _builder.add_conditional_edges(
     "knowledge_advisory_agent",
-    lambda state: state,
+    _route_from_knowledge_advisory,
     {"orchestrator": "orchestrator", END: END},
 )
 
@@ -160,6 +196,7 @@ async def stream(question: str, thread_id: str) -> AsyncIterator[str]:
                 for msg in reversed(msgs):
                     if isinstance(msg, AIMessage):
                         yield msg.content
+                        streamed = True
                         break
 
     _add_tokens(thread_id, tokens_this_turn)

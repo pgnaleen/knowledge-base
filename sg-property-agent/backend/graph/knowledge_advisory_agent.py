@@ -12,10 +12,7 @@ Missing info handling (same pattern as eligibility + financial agents):
   budget, purpose, family situation) → ask user → Command(goto=END)
   User answers → orchestrator re-routes → agent runs fully
 
-Retrieval: direct HTTP POST to KB-Pipeline /retrieve (all 7 sources, hybrid search)
-TODO (MCP task): replace _retrieve() with:
-    await mcp_client.call_tool("query_knowledge_base",
-                               {"query": english_query, "top_k": 7, "search_mode": "hybrid"})
+Retrieval: calls MCP query_knowledge_base tool directly (top_k=7, hybrid search, all sources).
 Future MCP tools: recommend_properties(), get_market_analysis(), get_property_valuation()
 
 Routes back to "orchestrator" on success, or END when asking user for more info.
@@ -26,23 +23,12 @@ from langgraph.graph import END
 from langgraph.types import Command
 
 from graph.llm import build_llm
-from graph.mcp_client import call_tool, list_tools
+from graph.mcp_client import call_tool
 from graph.state import GraphState
 
-# ── LLM + tool discovery ─────────────────────────────────────────────────────
+# ── LLM ──────────────────────────────────────────────────────────────────────
 
 _llm = build_llm("knowledge_advisory", streaming=False)
-
-_knowledge_llm_with_tools = None
-
-
-async def _get_knowledge_llm():
-    """Return LLM bound to KB query tools (query_*)."""
-    global _knowledge_llm_with_tools
-    if _knowledge_llm_with_tools is None:
-        tools = await list_tools(prefix="query_")
-        _knowledge_llm_with_tools = _llm.bind_tools(tools)
-    return _knowledge_llm_with_tools
 
 
 # ── Prompts ───────────────────────────────────────────────────────────────────
@@ -126,27 +112,21 @@ Ask the user a friendly question in {language} to gather:
 Keep it to 1–2 sentences. Be warm and conversational.
 """
 
-# ── RAG retrieval via bound tools ─────────────────────────────────────────────
-
-_RETRIEVE_PROMPT = """\
-Retrieve relevant Singapore property knowledge from the knowledge base.
-Call query_knowledge_base with top_k=7, search_mode='hybrid' (no source_filter — search all sources).
-"""
-
 
 async def _retrieve(english_query: str) -> str:
-    """Fetch relevant knowledge chunks from KB via tool-bound LLM (all 7 sources)."""
+    """Fetch relevant knowledge chunks from KB via MCP query_knowledge_base tool."""
     try:
-        llm_tools = await _get_knowledge_llm()
-        response = await llm_tools.ainvoke([
-            SystemMessage(content=_RETRIEVE_PROMPT),
-            HumanMessage(content=english_query),
-        ])
-        chunks: list[dict] = []
-        for tc in response.tool_calls:
-            result = await call_tool(tc["name"], tc["args"])
-            if isinstance(result, list):
-                chunks.extend(result)
+        results = await call_tool("query_knowledge_base", {
+            "query": english_query,
+            "top_k": 7,
+            "search_mode": "hybrid",
+        })
+        if isinstance(results, list):
+            chunks: list[dict] = results
+        elif isinstance(results, dict):
+            chunks = [results]  # single chunk returned when top_k result count == 1
+        else:
+            chunks = []
     except Exception:
         return "No additional context available from knowledge base."
 

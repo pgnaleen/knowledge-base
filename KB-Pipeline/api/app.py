@@ -5,7 +5,10 @@ from typing import AsyncGenerator
 from datetime import datetime
 
 import structlog
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 
 from api.dependencies import get_retrieval_service, init_services
 from api.retrieval import RetrievalService
@@ -38,6 +41,19 @@ app = FastAPI(
     description="Semantic retrieval over Singapore property regulatory knowledge base.",
     lifespan=lifespan,
 )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """Log invalid API payloads before returning FastAPI's normal 422 shape."""
+    errors = jsonable_encoder(exc.errors())
+    log.warning(
+        "api.request_validation_failed",
+        path=request.url.path,
+        method=request.method,
+        errors=errors,
+    )
+    return JSONResponse(status_code=422, content={"detail": errors})
 
 
 @app.get("/health")
@@ -85,18 +101,30 @@ def start_crawl(request: CrawlRequest) -> TaskResponse:
     from tasks.pipeline_tasks import run_source_pipeline_task
 
     log.info(
-        "crawl_requested",
+        "api.crawl_request_validated",
         source=request.source_code,
         job_type=request.job_type,
         page_limit=request.page_limit,
+        has_custom_scrapy_settings=bool(request.scrapy_settings),
     )
 
     # Prepare Scrapy settings with page limit if provided
     scrapy_settings = request.scrapy_settings or {}
     if request.page_limit:
         scrapy_settings["CLOSESPIDER_PAGECOUNT"] = request.page_limit
+        log.info(
+            "api.crawl_page_limit_applied",
+            source=request.source_code,
+            page_limit=request.page_limit,
+        )
 
     # Queue the Celery task
+    log.info(
+        "api.crawl_task_enqueue_started",
+        source=request.source_code,
+        job_type=request.job_type,
+        scrapy_settings=scrapy_settings,
+    )
     task = run_source_pipeline_task.delay(
         request.source_code,
         request.job_type,
@@ -104,7 +132,7 @@ def start_crawl(request: CrawlRequest) -> TaskResponse:
     )
 
     log.info(
-        "crawl_task_queued",
+        "api.crawl_task_enqueued",
         source=request.source_code,
         job_type=request.job_type,
         task_id=task.id,

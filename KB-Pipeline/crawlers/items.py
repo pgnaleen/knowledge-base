@@ -12,3 +12,4 @@ class CrawlItem(scrapy.Item):
     s3_path = scrapy.Field()          # single S3 key (set by S3Pipeline)
     extraction_flags = scrapy.Field() # warnings, word_count, is_empty, needs_ocr (set by S3Pipeline)
     needs_ocr = scrapy.Field()        # True if scanned PDF detected (set by S3Pipeline)
+    content_selectors = scrapy.Field()  # list[str], from source DB config (set by spider)

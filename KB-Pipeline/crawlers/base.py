@@ -1,5 +1,4 @@
 from collections.abc import Generator
-from logging import log
 from urllib.parse import urlparse
 
 import scrapy
@@ -25,11 +24,22 @@ def load_source_config_from_db(source_name: str) -> dict:
 
     db = SessionLocal()
     try:
+        logger.info("spider.config_lookup_started", source=source_name)
         source = db.query(Source).filter_by(code=source_name, is_active=True).first()
         if not source:
+            logger.error("spider.config_not_found", source=source_name)
             raise RuntimeError(f"Source '{source_name}' not found or inactive in DB")
-        logger.info(f"Loaded config for source '{source_name}' from DB")
-        return source.crawl_config or {}
+        crawl_config = source.crawl_config or {}
+        logger.info(
+            "spider.config_loaded",
+            source=source_name,
+            source_id=str(source.id),
+            base_url=source.base_url,
+            start_url_count=len(crawl_config.get("start_urls", [])),
+            allowed_domain_count=len(crawl_config.get("allowed_domains", [])),
+            crawl_config_keys=sorted(crawl_config.keys()),
+        )
+        return crawl_config
     finally:
         db.close()
 
@@ -39,11 +49,23 @@ class BaseCrawler(scrapy.Spider):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        logger.info(
+            "spider.init_started",
+            spider=self.name,
+            source=self.source_name,
+            has_class_source_config=bool(getattr(self, "source_config", None)),
+        )
         # Load from DB only if not already set (preserves test class-attr pattern)
         if not getattr(self, "source_config", None):
             self.source_config = load_source_config_from_db(self.source_name)
         self._apply_db_custom_settings()
-        logger.info(f"Initialized crawler for source '{self.source_name}'")
+        logger.info(
+            "spider.initialized",
+            spider=self.name,
+            source=self.source_name,
+            start_url_count=len(self.source_config.get("start_urls", [])),
+            js_rendering=self.source_config.get("js_rendering", False),
+        )
 
 
     def _apply_db_custom_settings(self):
@@ -57,14 +79,25 @@ class BaseCrawler(scrapy.Spider):
         # Merge: subclass custom_settings takes precedence
         self.custom_settings = {**base, **(self.custom_settings or {})}
 
-        logger.info(f" (delay={base.get('DOWNLOAD_DELAY')}, ")
-        logger.info(f" (respect_robots_txt={base.get('ROBOTSTXT_OBEY')}, ")
-        logger.debug(f"Applied DB config to custom_settings for '{self.source_name}': {self.custom_settings}")
+        logger.info(
+            "spider.custom_settings_applied",
+            source=self.source_name,
+            download_delay=base.get("DOWNLOAD_DELAY"),
+            respect_robots_txt=base.get("ROBOTSTXT_OBEY"),
+            has_user_agent="USER_AGENT" in base,
+            custom_settings_keys=sorted(self.custom_settings.keys()),
+        )
 
     def get_start_urls(self) -> list[str]:
         """Return start URLs for this source. Reads from DB config."""
-        logger.info(f"Getting start URLs for source '{self.source_name}' from DB config")
-        return self.source_config.get("start_urls", [])
+        start_urls = self.source_config.get("start_urls", [])
+        logger.info(
+            "spider.start_urls_loaded",
+            source=self.source_name,
+            start_url_count=len(start_urls),
+            start_urls=start_urls,
+        )
+        return start_urls
 
     def parse_document(self, response) -> Generator[CrawlItem, None, None]:
         """Parse HTML/PDF response and yield CrawlItem."""
@@ -73,6 +106,7 @@ class BaseCrawler(scrapy.Spider):
         is_html = "text/html" in ct
 
         if is_pdf:
+            logger.info("spider.document_parsed", source=self.source_name, url=response.url, content_type="pdf")
             yield CrawlItem(
                 url=response.url,
                 source_code=self.source_name,
@@ -84,30 +118,80 @@ class BaseCrawler(scrapy.Spider):
             content = self.extract_main_content(response.text)
             min_len = self.source_config.get("min_content_length", 100)
             if len(content) < min_len:
+                logger.info(
+                    "spider.document_skipped_short_content",
+                    source=self.source_name,
+                    url=response.url,
+                    text_length=len(content),
+                    min_content_length=min_len,
+                )
                 return
             # Optional content keyword filter (e.g. MAS filtering for property-related)
             kw_filter = self.source_config.get("content_keywords_filter")
             if kw_filter and not any(kw in content.lower() for kw in kw_filter):
+                logger.info(
+                    "spider.document_skipped_keyword_filter",
+                    source=self.source_name,
+                    url=response.url,
+                    keyword_count=len(kw_filter),
+                )
                 return
+            logger.info(
+                "spider.document_parsed",
+                source=self.source_name,
+                url=response.url,
+                content_type="html",
+                text_length=len(content),
+            )
             yield CrawlItem(
                 url=response.url,
                 source_code=self.source_name,
                 content_type="html",
                 raw_html=response.body,
                 content_hash="",
+                content_selectors=self.source_config.get("content_selectors", []),
             )
 
     def start_requests(self):
         js = self.source_config.get("js_rendering", False)
         wait_event = self.source_config.get("playwright_wait_event", "domcontentloaded")
-        for url in self.get_start_urls():
+        start_urls = self.get_start_urls()
+        if not start_urls:
+            logger.warning("spider.no_start_urls", source=self.source_name, spider=self.name)
+        logger.info(
+            "spider.start_requests_started",
+            source=self.source_name,
+            spider=self.name,
+            start_url_count=len(start_urls),
+            js_rendering=js,
+            wait_event=wait_event,
+        )
+        for url in start_urls:
             meta = {}
             if js and not url.lower().endswith(".pdf"):
                 meta["playwright"] = True
                 meta["playwright_page_methods"] = [PageMethod("wait_for_load_state", wait_event)]
+            logger.info(
+                "spider.start_request_scheduled",
+                source=self.source_name,
+                url=url,
+                playwright=meta.get("playwright", False),
+            )
             yield scrapy.Request(url, callback=self.handle_response, meta=meta)
 
+    async def start(self):
+        logger.info("spider.start_method_entered", source=self.source_name, spider=self.name)
+        for request in self.start_requests():
+            yield request
+
     def handle_response(self, response):
+        logger.info(
+            "spider.response_received",
+            source=self.source_name,
+            url=response.url,
+            status=response.status,
+            content_type=response.headers.get("Content-Type", b"").decode("utf-8", errors="ignore"),
+        )
         yield from self.parse_document(response)
 
         content_type = response.headers.get("Content-Type", b"").decode("utf-8", errors="ignore")
@@ -119,7 +203,10 @@ class BaseCrawler(scrapy.Spider):
         wait_event = self.source_config.get("playwright_wait_event", "domcontentloaded")
         allowed = self.source_config.get("allowed_domains", [])
 
-        for href in response.css("a::attr(href)").getall():
+        discovered_links = response.css("a::attr(href)").getall()
+        followed_count = 0
+        skipped_count = 0
+        for href in discovered_links:
             url = response.urljoin(href)
             if self.should_follow_link(url, allowed):
                 meta = {}
@@ -127,7 +214,26 @@ class BaseCrawler(scrapy.Spider):
                 if js and not parsed_url.path.lower().endswith(".pdf"):
                     meta["playwright"] = True
                     meta["playwright_page_methods"] = [PageMethod("wait_for_load_state", wait_event)]
+                followed_count += 1
+                logger.debug(
+                    "spider.follow_link_scheduled",
+                    source=self.source_name,
+                    from_url=response.url,
+                    to_url=url,
+                    playwright=meta.get("playwright", False),
+                )
                 yield response.follow(url, callback=self.handle_response, meta=meta)
+            else:
+                skipped_count += 1
+                logger.debug("spider.follow_link_skipped", source=self.source_name, from_url=response.url, to_url=url)
+        logger.info(
+            "spider.links_processed",
+            source=self.source_name,
+            url=response.url,
+            discovered_count=len(discovered_links),
+            followed_count=followed_count,
+            skipped_count=skipped_count,
+        )
 
     @staticmethod
     def _is_pdf_url(url: str) -> bool:

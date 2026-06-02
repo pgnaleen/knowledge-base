@@ -53,13 +53,26 @@ async def call_tool(tool_name: str, params: dict[str, Any]) -> Any:
             if result.isError:
                 raise RuntimeError(f"MCP tool '{tool_name}' returned an error: {result.content}")
 
-            raw = result.content[0].text if result.content else ""
+            if not result.content:
+                return ""
 
-            # Parse JSON if possible — calculators return dicts, knowledge returns lists
-            try:
-                return json.loads(raw)
-            except (json.JSONDecodeError, TypeError):
-                return raw
+            # FastMCP puts each item in a separate content block (e.g. KB returns N chunks
+            # as N blocks). Single-block responses (calculators) are returned as-is.
+            if len(result.content) == 1:
+                raw = result.content[0].text
+                try:
+                    return json.loads(raw)
+                except (json.JSONDecodeError, TypeError):
+                    return raw
+            else:
+                parsed = []
+                for block in result.content:
+                    raw = block.text if hasattr(block, "text") else ""
+                    try:
+                        parsed.append(json.loads(raw))
+                    except (json.JSONDecodeError, TypeError):
+                        parsed.append(raw)
+                return parsed
 
         except Exception as exc:
             last_exc = exc
