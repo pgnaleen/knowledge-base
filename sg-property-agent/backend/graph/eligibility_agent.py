@@ -244,6 +244,19 @@ async def run_eligibility(state: GraphState) -> Command:
     # Step 1: retrieve latest policy docs (always — no caching on stale rules)
     policy_context = await _retrieve_policy(english_query)
 
+    # KB gate — stop before any LLM call if no documents were retrieved.
+    # Prevents the model from answering eligibility questions from training memory.
+    if "No relevant" in policy_context:
+        return Command(
+            goto=END,
+            update={
+                "messages": [AIMessage(content=(
+                    "I wasn't able to find relevant property policy documents in my "
+                    "knowledge base for your question."
+                ))],
+            },
+        )
+
     # Step 2: extract buyer params from full conversation history
     # TODO (MCP task): call get_user_profile(user_id) first, then extract remaining gaps
     params: BuyerParams = await _structured_llm.ainvoke([
@@ -298,13 +311,10 @@ async def run_eligibility(state: GraphState) -> Command:
         HumanMessage(content=english_query),
     ])
 
-    completed = list(state.get("completed_agents") or [])
-    completed.append("eligibility_agent")
-
     return Command(
         goto="orchestrator",
         update={
             "eligibility_result": result_json,
-            "completed_agents": completed,
+            "completed_agents": ["eligibility_agent"],  # reducer merges parallel writes
         },
     )

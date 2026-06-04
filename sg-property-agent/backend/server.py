@@ -24,6 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from channels.whatsapp.router import create_whatsapp_router
+from graph.main import app as graph_app
 from graph.main import reset as graph_reset
 from graph.main import stream as graph_stream
 from middleware import (
@@ -119,3 +120,51 @@ async def reset(req: ResetRequest) -> dict:
     """Clear conversation memory and token budget for a session."""
     graph_reset(req.thread_id)
     return {"status": "ok", "thread_id": req.thread_id}
+
+
+@app.post("/chat/inspect")
+async def chat_inspect(req: ChatRequest) -> dict:
+    """
+    Testing/debug endpoint — NOT for production use.
+
+    Runs the full agent graph synchronously and returns routing metadata
+    alongside the final answer. Allows tests to assert on exactly which
+    intent was detected and which agents were invoked, without guessing
+    from response content.
+
+    Returns:
+        intent:            orchestrator's classified intent (e.g. "financial")
+        agents_called:     specialist agents that were planned to run
+        completed_agents:  specialist agents that actually completed
+        answer:            the final text response from the graph
+        error:             present only when graph raised an unhandled exception
+    """
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    config = {"configurable": {"thread_id": req.thread_id}}
+    try:
+        result = await graph_app.ainvoke(
+            {"messages": [HumanMessage(content=req.question)]},
+            config,
+        )
+    except Exception as exc:
+        return {
+            "intent": "error",
+            "agents_called": [],
+            "completed_agents": [],
+            "answer": "",
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+    answer = ""
+    for msg in reversed(result.get("messages", [])):
+        if isinstance(msg, AIMessage):
+            answer = msg.content
+            break
+
+    return {
+        "intent": result.get("intent", "unknown"),
+        "agents_called": result.get("agent_plan", []),
+        "completed_agents": result.get("completed_agents", []),
+        "answer": answer,
+    }

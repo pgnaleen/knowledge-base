@@ -221,6 +221,8 @@ services:
       - ./sg-property-agent/backend/.env
     environment:
       MCP_SERVER_URL: http://mcp-server:8002/mcp
+    volumes:
+      - ./testing:/app/testing
     depends_on:
       mcp-server:
         condition: service_healthy

@@ -22,7 +22,6 @@ Flow:
 """
 
 import json
-import os
 from typing import Any, Optional
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -46,7 +45,10 @@ async def _get_financial_llm():
     """Return LLM bound to all MCP tools (calculators + KB query)."""
     global _financial_llm_with_tools
     if _financial_llm_with_tools is None:
-        tools = await list_tools()  # all tools: calculate_* + query_*
+        try:
+            tools = await list_tools()  # all tools: calculate_* + query_*
+        except Exception:
+            tools = []  # MCP server unavailable — proceed without tools
         _financial_llm_with_tools = _llm.bind_tools(tools)
     return _financial_llm_with_tools
 
@@ -249,6 +251,19 @@ async def run_financial(state: GraphState) -> Command:
     # Step 1: retrieve financing policy context via MCP
     policy_context = await _retrieve_financing_policy(english_query)
 
+    # KB gate — stop before any LLM call if no documents were retrieved.
+    # Prevents the model from adding unsupported policy commentary from training memory.
+    if "No relevant" in policy_context:
+        return Command(
+            goto=END,
+            update={
+                "messages": [AIMessage(content=(
+                    "I wasn't able to find relevant financing policy documents in my "
+                    "knowledge base for your question."
+                ))],
+            },
+        )
+
     # Step 2: extract financial params from full conversation history
     # TODO (MCP task): prepend get_user_profile(user_id) result here
     params: FinancialParams = await _structured_llm.ainvoke([
@@ -325,13 +340,10 @@ async def run_financial(state: GraphState) -> Command:
         HumanMessage(content=english_query),
     ])
 
-    completed = list(state.get("completed_agents") or [])
-    completed.append("financial_agent")
-
     return Command(
         goto="orchestrator",
         update={
             "financial_result": result_json,
-            "completed_agents": completed,
+            "completed_agents": ["financial_agent"],  # reducer merges parallel writes
         },
     )

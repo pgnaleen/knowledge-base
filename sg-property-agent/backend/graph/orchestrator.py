@@ -92,11 +92,16 @@ Classify into exactly one intent:
 
   financial
     → "How much is stamp duty?", "Can I afford X?", "What is TDSR for...?"
+    → "What is the ABSD rate for a foreigner?" — asking for a specific RATE for a buyer profile → financial
+    → "What is the BSD on a $500K property?" — asking for a specific AMOUNT → financial
+    → KEY RULE: if the question names a buyer profile (foreigner, SC, PR) AND asks for a rate/amount/cost → financial
     → Needs: price, income, loan amount, citizenship, property type
 
   advisory
-    → "What should I do?", "Explain HDB rules", "What is ABSD?", "Which is better?"
+    → "What should I do?", "Explain HDB rules", "Which is better?"
+    → "What is ABSD?" (no buyer profile, no rate/amount requested) → advisory
     → General knowledge, explanations, policy details, recommendations
+    → BOUNDARY: "What is ABSD?" alone → advisory. "What is the ABSD rate for a foreigner?" → financial
 
   eligibility_financial
     → Question requires BOTH eligibility rules AND financial calculations
@@ -182,7 +187,7 @@ async def orchestrate(state: GraphState) -> Command:
         "detected_language": decision.detected_language,
         "english_query":     decision.english_query,
         "intent":            decision.intent,
-        "completed_agents":  [],
+        "completed_agents":  None,  # None triggers _merge_completed reset → []
     }
 
     # Chitchat or security violation — reply inline with streaming LLM, skip all specialists
@@ -209,19 +214,32 @@ async def orchestrate(state: GraphState) -> Command:
     if execution_mode == "single":
         return Command(goto=agents[0], update=base_update)
 
+    # Parallel fan-out: send only the fields agents need to READ.
+    # Result fields (eligibility_result, financial_result, advisory_result) are
+    # intentionally excluded — agents WRITE them, never read them. Including them
+    # in parallel Send states causes InvalidUpdateError (two concurrent writes to
+    # a field without a reducer recognised by this LangGraph version).
+    _PARALLEL_SEND_KEYS = {
+        "messages", "detected_language", "english_query",
+        "intent", "agent_plan", "execution_mode", "completed_agents",
+    }
+    send_state = {k: v for k, v in {**state, **base_update}.items()
+                  if k in _PARALLEL_SEND_KEYS}
+
     # "full" intent: eligibility + financial run in parallel first,
-    # then knowledge_advisory runs after with their results
+    # then knowledge_advisory runs after with their combined results
     if decision.intent == "full":
         parallel_agents = ["eligibility_agent", "financial_agent"]
         base_update["agent_plan"] = agents  # includes knowledge_advisory_agent
+        send_state["agent_plan"] = agents
         return Command(
-            goto=[Send(a, {**state, **base_update}) for a in parallel_agents],
+            goto=[Send(a, send_state) for a in parallel_agents],
             update=base_update,
         )
 
     # eligibility_financial — pure parallel, no advisory needed
     return Command(
-        goto=[Send(a, {**state, **base_update}) for a in agents],
+        goto=[Send(a, send_state) for a in agents],
         update=base_update,
     )
 
@@ -239,9 +257,23 @@ async def _synthesise(state: GraphState) -> Command:
     if state.get("advisory_result"):
         parts.append(f"KNOWLEDGE & ADVISORY:\n{state['advisory_result']}")
 
+    # All dispatched agents hit the KB gate — return graceful fallback instead of
+    # calling the synthesis LLM with empty input (which produces a hallucinated answer).
+    if not parts:
+        return Command(
+            goto=END,
+            update={
+                "messages": [AIMessage(content=(
+                    "I wasn't able to find relevant property documents in my knowledge base "
+                    "for your question. Please check hdb.gov.sg, iras.gov.sg, or ura.gov.sg "
+                    "for authoritative information, or try again once the knowledge base is populated."
+                ))],
+            },
+        )
+
     prompt = _SYNTHESIS_PROMPT.format(
         language=state.get("detected_language", "en"),
-        results="\n\n".join(parts) if parts else "No specialist results available.",
+        results="\n\n".join(parts),
     )
 
     response = await _synthesis_llm.ainvoke([SystemMessage(content=prompt)])

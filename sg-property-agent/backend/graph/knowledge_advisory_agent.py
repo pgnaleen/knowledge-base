@@ -187,6 +187,19 @@ async def run_knowledge_advisory(state: GraphState) -> Command:
     # Retrieve KB context (always — no stale LLM knowledge)
     context = await _retrieve(english_query)
 
+    # KB gate — stop before any LLM call if no documents were retrieved.
+    # Prevents the model from answering advisory/knowledge questions from training memory.
+    if "No relevant" in context:
+        return Command(
+            goto=END,
+            update={
+                "messages": [AIMessage(content=(
+                    "I wasn't able to find relevant property documents in my "
+                    "knowledge base for your question."
+                ))],
+            },
+        )
+
     if advisory_mode:
         system_prompt = _ADVISORY_PROMPT.format(
             eligibility_result=eligibility_result,
@@ -202,13 +215,10 @@ async def run_knowledge_advisory(state: GraphState) -> Command:
         HumanMessage(content=english_query),
     ])
 
-    completed = list(state.get("completed_agents") or [])
-    completed.append("knowledge_advisory_agent")
-
     return Command(
         goto="orchestrator",
         update={
             "advisory_result": response.content,
-            "completed_agents": completed,
+            "completed_agents": ["knowledge_advisory_agent"],  # reducer merges parallel writes
         },
     )
