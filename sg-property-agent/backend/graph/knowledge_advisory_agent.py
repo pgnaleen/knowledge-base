@@ -113,7 +113,7 @@ Keep it to 1–2 sentences. Be warm and conversational.
 """
 
 
-async def _retrieve(english_query: str) -> str:
+async def _retrieve(english_query: str) -> tuple[str, list[dict]]:
     """Fetch relevant knowledge chunks from KB via MCP query_knowledge_base tool."""
     try:
         results = await call_tool("query_knowledge_base", {
@@ -128,10 +128,10 @@ async def _retrieve(english_query: str) -> str:
         else:
             chunks = []
     except Exception:
-        return "No additional context available from knowledge base."
+        return "No additional context available from knowledge base.", []
 
     if not chunks:
-        return "No relevant documents found."
+        return "No relevant documents found.", []
 
     parts = []
     for i, chunk in enumerate(chunks, 1):
@@ -141,7 +141,7 @@ async def _retrieve(english_query: str) -> str:
         citation = f"[{source}]({url})" if url else f"[{source}]"
         parts.append(f"[{i}] {citation}\n{text}")
 
-    return "\n\n".join(parts)
+    return "\n\n".join(parts), chunks
 
 
 def _build_conversation_context(state: GraphState) -> str:
@@ -178,25 +178,26 @@ async def run_knowledge_advisory(state: GraphState) -> Command:
         check_result = check_response.content.strip()
 
         if check_result.upper() != "SUFFICIENT":
-            # Not enough context — ask the user directly, skip orchestrator synthesis
+            # Use CLARIFY sentinel so orchestrator detects and relays the question.
             return Command(
-                goto=END,
-                update={"messages": [AIMessage(content=check_result)]},
+                goto="orchestrator",
+                update={
+                    "advisory_result": f"CLARIFY:{check_result}",
+                    "advisory_chunks": [],
+                    "completed_agents": ["knowledge_advisory_agent"],
+                },
             )
 
     # Retrieve KB context (always — no stale LLM knowledge)
-    context = await _retrieve(english_query)
+    context, raw_chunks = await _retrieve(english_query)
 
-    # KB gate — stop before any LLM call if no documents were retrieved.
-    # Prevents the model from answering advisory/knowledge questions from training memory.
+    # KB gate — always return to orchestrator (never END) so parallel flows don't loop.
     if "No relevant" in context:
         return Command(
-            goto=END,
+            goto="orchestrator",
             update={
-                "messages": [AIMessage(content=(
-                    "I wasn't able to find relevant property documents in my "
-                    "knowledge base for your question."
-                ))],
+                "advisory_chunks": raw_chunks,
+                "completed_agents": ["knowledge_advisory_agent"],
             },
         )
 
@@ -219,6 +220,7 @@ async def run_knowledge_advisory(state: GraphState) -> Command:
         goto="orchestrator",
         update={
             "advisory_result": response.content,
+            "advisory_chunks": raw_chunks,
             "completed_agents": ["knowledge_advisory_agent"],  # reducer merges parallel writes
         },
     )

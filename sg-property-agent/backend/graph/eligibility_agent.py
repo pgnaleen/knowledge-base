@@ -58,7 +58,7 @@ Call query_knowledge_base with source_filter=['hdb','ura'], top_k=5, search_mode
 """
 
 
-async def _retrieve_policy(english_query: str) -> str:
+async def _retrieve_policy(english_query: str) -> tuple[str, list[dict]]:
     """Retrieve eligibility-related policy docs from KB via tool-bound LLM."""
     try:
         llm_tools = await _get_eligibility_llm()
@@ -72,10 +72,10 @@ async def _retrieve_policy(english_query: str) -> str:
             if isinstance(result, list):
                 chunks.extend(result)
     except Exception:
-        return "No policy context available from knowledge base."
+        return "No policy context available from knowledge base.", []
 
     if not chunks:
-        return "No relevant policy documents found."
+        return "No relevant policy documents found.", []
 
     parts = []
     for i, chunk in enumerate(chunks, 1):
@@ -85,7 +85,7 @@ async def _retrieve_policy(english_query: str) -> str:
         citation = f"[{source}]({url})" if url else f"[{source}]"
         parts.append(f"[{i}] {citation}\n{text}")
 
-    return "\n\n".join(parts)
+    return "\n\n".join(parts), chunks
 
 
 # ── Buyer parameter extraction ────────────────────────────────────────────────
@@ -242,18 +242,16 @@ async def run_eligibility(state: GraphState) -> Command:
     conversation_context = _build_conversation_context(state)
 
     # Step 1: retrieve latest policy docs (always — no caching on stale rules)
-    policy_context = await _retrieve_policy(english_query)
+    policy_context, raw_chunks = await _retrieve_policy(english_query)
 
-    # KB gate — stop before any LLM call if no documents were retrieved.
-    # Prevents the model from answering eligibility questions from training memory.
+    # KB gate — always return to orchestrator (never END) so parallel flows don't loop.
+    # Orchestrator synthesis handles the empty-result case gracefully.
     if "No relevant" in policy_context:
         return Command(
-            goto=END,
+            goto="orchestrator",
             update={
-                "messages": [AIMessage(content=(
-                    "I wasn't able to find relevant property policy documents in my "
-                    "knowledge base for your question."
-                ))],
+                "eligibility_chunks": raw_chunks,
+                "completed_agents": ["eligibility_agent"],
             },
         )
 
@@ -264,7 +262,8 @@ async def run_eligibility(state: GraphState) -> Command:
         HumanMessage(content=conversation_context),
     ])
 
-    # Step 3: ask for missing critical info — go directly to END (not orchestrator)
+    # Step 3: ask for missing critical info — use CLARIFY sentinel so orchestrator
+    # can detect and relay the question without calling the synthesis LLM.
     missing = _find_missing_critical(params)
     if missing:
         clarify_response = await _llm.ainvoke([
@@ -276,8 +275,11 @@ async def run_eligibility(state: GraphState) -> Command:
             HumanMessage(content=english_query),
         ])
         return Command(
-            goto=END,
-            update={"messages": [AIMessage(content=clarify_response.content)]},
+            goto="orchestrator",
+            update={
+                "eligibility_result": f"CLARIFY:{clarify_response.content}",
+                "completed_agents": ["eligibility_agent"],
+            },
         )
 
     # Step 4: eligibility reasoning over retrieved policy
@@ -315,6 +317,7 @@ async def run_eligibility(state: GraphState) -> Command:
         goto="orchestrator",
         update={
             "eligibility_result": result_json,
+            "eligibility_chunks": raw_chunks,
             "completed_agents": ["eligibility_agent"],  # reducer merges parallel writes
         },
     )

@@ -46,35 +46,58 @@ from graph.state import GraphState
 # each node handles the actual runtime routing, but these must return valid string
 # keys (not the state dict) to avoid TypeError: unhashable type: 'dict'.
 
+_CLARIFY = "CLARIFY:"  # mirrors orchestrator._CLARIFY_PREFIX
+
+
 def _route_from_orchestrator(state: GraphState) -> str:
-    # Mirrors orchestrate() Pass 2 check: all planned agents done → synthesis → END
+    """
+    Must mirror orchestrate() exactly. LangGraph 0.2.76 uses this conditional-edge
+    function at runtime — if it disagrees with Command.goto, the edge function wins.
+    """
     agent_plan = state.get("agent_plan") or []
-    completed = state.get("completed_agents") or []
+    completed  = state.get("completed_agents") or []
+
+    # Pass 2: all planned agents done → synthesis → END
     if agent_plan and set(completed) >= set(agent_plan):
         return END
 
+    # "full" intent intermediate: elig+fin done, advisory not yet dispatched
+    if (
+        agent_plan
+        and "knowledge_advisory_agent" in agent_plan
+        and "knowledge_advisory_agent" not in completed
+        and {"eligibility_agent", "financial_agent"} <= set(completed)
+    ):
+        elig = state.get("eligibility_result") or ""
+        fin  = state.get("financial_result") or ""
+        if elig.startswith(_CLARIFY) or fin.startswith(_CLARIFY):
+            return END                        # synthesise will relay the clarification
+        return "knowledge_advisory_agent"
+
+    # Pass 1: route to first specialist in the plan (or by intent)
     intent = state.get("intent", "advisory")
     if intent == "chitchat":
         return END
     return {
-        "eligibility":           "eligibility_agent",
-        "financial":             "financial_agent",
-        "advisory":              "knowledge_advisory_agent",
-        "eligibility_financial": "eligibility_agent",
-        "full":                  "eligibility_agent",
+        "eligibility":            "eligibility_agent",
+        "financial":              "financial_agent",
+        "advisory":               "knowledge_advisory_agent",
+        "eligibility_financial":  "eligibility_agent",
+        "full":                   "eligibility_agent",
     }.get(intent, "knowledge_advisory_agent")
 
 
 def _route_from_eligibility(state: GraphState) -> str:
-    return "orchestrator" if state.get("eligibility_result") else END
+    # All code paths now go to orchestrator (KB gate, clarify, success all use goto="orchestrator")
+    return "orchestrator"
 
 
 def _route_from_financial(state: GraphState) -> str:
-    return "orchestrator" if state.get("financial_result") else END
+    return "orchestrator"
 
 
 def _route_from_knowledge_advisory(state: GraphState) -> str:
-    return "orchestrator" if state.get("advisory_result") else END
+    return "orchestrator"
 
 
 # ── Graph assembly ────────────────────────────────────────────────────────────

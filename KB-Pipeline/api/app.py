@@ -62,6 +62,13 @@ def health() -> dict:
     return {"status": "ok"}
 
 
+@app.get("/config")
+def config() -> dict:
+    """Return active configuration — used by eval scripts to verify the correct Pinecone index."""
+    from config.settings import settings
+    return {"pinecone_index": settings.pinecone_index, "pinecone_environment": settings.pinecone_environment}
+
+
 @app.post("/retrieve", response_model=RetrieveResponse)
 def retrieve(
     request: RetrieveRequest,

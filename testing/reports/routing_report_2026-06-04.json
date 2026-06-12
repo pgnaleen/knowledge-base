@@ -1,10 +1,10 @@
 {
-  "generated_at": "2026-06-04T08:13:49.180139",
+  "generated_at": "2026-06-04T14:10:21.075958",
   "backend": "http://localhost:8001",
   "total": 10,
-  "passed": 9,
-  "accuracy": 0.9,
-  "mean_latency_s": 8.01,
+  "passed": 10,
+  "accuracy": 1.0,
+  "mean_latency_s": 6.81,
   "target_accuracy": 0.9,
   "target_latency_s": 5.0,
   "meets_accuracy_target": true,
@@ -15,7 +15,7 @@
       "query": "Hello!",
       "expected": "chitchat",
       "actual": "chitchat",
-      "time_s": 8.41,
+      "time_s": 4.45,
       "passed": true
     },
     {
@@ -23,7 +23,7 @@
       "query": "Thanks, that was really helpful!",
       "expected": "chitchat",
       "actual": "chitchat",
-      "time_s": 5.57,
+      "time_s": 2.11,
       "passed": true
     },
     {
@@ -39,7 +39,7 @@
       "query": "What is the weather like in Singapore today?",
       "expected": "chitchat",
       "actual": "chitchat",
-      "time_s": 4.32,
+      "time_s": 3.03,
       "passed": true
     },
     {
@@ -47,7 +47,7 @@
       "query": "Am I eligible to buy a BTO flat as a Singapore Permanent Resident?",
       "expected": "eligibility",
       "actual": "eligibility",
-      "time_s": 21.08,
+      "time_s": 20.32,
       "passed": true
     },
     {
@@ -55,7 +55,7 @@
       "query": "What is the Additional Buyer Stamp Duty for a foreigner buying a condo in Singapore?",
       "expected": "financial",
       "actual": "financial",
-      "time_s": 4.84,
+      "time_s": 4.12,
       "passed": true
     },
     {
@@ -63,23 +63,23 @@
       "query": "Can you explain what the HDB Minimum Occupation Period means?",
       "expected": "advisory",
       "actual": "advisory",
-      "time_s": 10.02,
+      "time_s": 7.93,
       "passed": true
     },
     {
       "id": "GD-08",
       "query": "Can I as a Singapore PR buy an $800,000 condo and what is the stamp duty I need to pay?",
       "expected": "eligibility_financial",
-      "actual": "error",
-      "time_s": 15.3,
-      "passed": false
+      "actual": "eligibility_financial",
+      "time_s": 16.16,
+      "passed": true
     },
     {
       "id": "GD-09",
       "query": "I earn $7,000 a month and I am a Singapore Citizen. Should I buy an HDB flat or a condo?",
       "expected": "full",
       "actual": "full",
-      "time_s": 8.29,
+      "time_s": 7.22,
       "passed": true
     },
     {
@@ -87,7 +87,7 @@
       "query": "你好！",
       "expected": "chitchat",
       "actual": "chitchat",
-      "time_s": 2.27,
+      "time_s": 2.76,
       "passed": true
     }
   ]

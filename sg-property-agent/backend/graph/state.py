@@ -1,6 +1,6 @@
 """Shared state definition for the multi-agent property advisory graph."""
 
-from typing import Annotated
+from typing import Annotated, Optional
 
 from langgraph.graph.message import add_messages
 from typing_extensions import NotRequired, TypedDict
@@ -44,7 +44,7 @@ class GraphState(TypedDict):
 
     # ── Multi-agent routing ─────────────────────────────────────────────────
     agent_plan:       NotRequired[list]                            # e.g. ["eligibility", "financial"]
-    completed_agents: NotRequired[Annotated[list, _merge_completed]] # agents that have finished
+    completed_agents: Annotated[Optional[list], _merge_completed]   # agents that have finished
     execution_mode:   NotRequired[str]    # "single" | "parallel" | "full"
 
     # ── Structured outputs per specialist agent ─────────────────────────────
@@ -52,11 +52,18 @@ class GraphState(TypedDict):
     # result field in the same superstep without raising InvalidUpdateError.
     #
     # Eligibility Agent → JSON: {eligible, reasons, property_types, conditions}
-    eligibility_result: NotRequired[Annotated[str, _keep_last]]
+    eligibility_result: Annotated[Optional[str], _keep_last]
 
     # Financial Agent → JSON: {affordable, bsd, absd, tdsr_ok, msr_ok,
     #                           ltv, downpayment, cpf_usable, grants, monthly_payment}
-    financial_result: NotRequired[Annotated[str, _keep_last]]
+    financial_result: Annotated[Optional[str], _keep_last]
 
     # Knowledge + Advisory Agent → RAG text with citations + recommendation
-    advisory_result: NotRequired[Annotated[str, _keep_last]]
+    advisory_result: Annotated[Optional[str], _keep_last]
+
+    # ── Raw retrieval chunks per specialist agent (for RAG evaluation) ──────
+    # Each field stores the list[dict] returned by query_knowledge_base so that
+    # /chat/inspect can expose them to DeepEval for Faithfulness/Contextual metrics.
+    eligibility_chunks: Annotated[Optional[list], _keep_last]
+    financial_chunks:   Annotated[Optional[list], _keep_last]
+    advisory_chunks:    Annotated[Optional[list], _keep_last]

@@ -54,7 +54,7 @@ async def _get_financial_llm():
 
 # ── RAG retrieval via MCP ─────────────────────────────────────────────────────
 
-async def _retrieve_financing_policy(english_query: str) -> str:
+async def _retrieve_financing_policy(english_query: str) -> tuple[str, list[dict]]:
     """Retrieve financing policy docs from KB via MCP (IRAS + MAS sources)."""
     try:
         chunks: list[dict] = await call_tool(
@@ -67,10 +67,10 @@ async def _retrieve_financing_policy(english_query: str) -> str:
             },
         )
     except Exception:
-        return "No financing policy context available from knowledge base."
+        return "No financing policy context available from knowledge base.", []
 
     if not chunks:
-        return "No relevant financing documents found."
+        return "No relevant financing documents found.", []
 
     parts = []
     for i, chunk in enumerate(chunks, 1):
@@ -80,7 +80,7 @@ async def _retrieve_financing_policy(english_query: str) -> str:
         citation = f"[{source}]({url})" if url else f"[{source}]"
         parts.append(f"[{i}] {citation}\n{text}")
 
-    return "\n\n".join(parts)
+    return "\n\n".join(parts), chunks
 
 
 # ── Parameter extraction ──────────────────────────────────────────────────────
@@ -249,18 +249,15 @@ async def run_financial(state: GraphState) -> Command:
     conversation_context = _build_conversation_context(state)
 
     # Step 1: retrieve financing policy context via MCP
-    policy_context = await _retrieve_financing_policy(english_query)
+    policy_context, raw_chunks = await _retrieve_financing_policy(english_query)
 
-    # KB gate — stop before any LLM call if no documents were retrieved.
-    # Prevents the model from adding unsupported policy commentary from training memory.
-    if "No relevant" in policy_context:
+    # KB gate — always return to orchestrator (never END) so parallel flows don't loop.
+    if "No relevant" in policy_context or "No financing policy context" in policy_context:
         return Command(
-            goto=END,
+            goto="orchestrator",
             update={
-                "messages": [AIMessage(content=(
-                    "I wasn't able to find relevant financing policy documents in my "
-                    "knowledge base for your question."
-                ))],
+                "financial_chunks": raw_chunks,
+                "completed_agents": ["financial_agent"],
             },
         )
 
@@ -271,7 +268,7 @@ async def run_financial(state: GraphState) -> Command:
         HumanMessage(content=conversation_context),
     ])
 
-    # Step 3: check for critical missing information
+    # Step 3: check for critical missing information — use CLARIFY sentinel
     missing = _find_missing_critical(params)
     if missing:
         clarify_response = await _llm.ainvoke([
@@ -283,8 +280,11 @@ async def run_financial(state: GraphState) -> Command:
             HumanMessage(content=english_query),
         ])
         return Command(
-            goto=END,
-            update={"messages": [AIMessage(content=clarify_response.content)]},
+            goto="orchestrator",
+            update={
+                "financial_result": f"CLARIFY:{clarify_response.content}",
+                "completed_agents": ["financial_agent"],
+            },
         )
 
     # Step 4: LLM selects and calls applicable calculators via bound tools
@@ -344,6 +344,7 @@ async def run_financial(state: GraphState) -> Command:
         goto="orchestrator",
         update={
             "financial_result": result_json,
+            "financial_chunks": raw_chunks,
             "completed_agents": ["financial_agent"],  # reducer merges parallel writes
         },
     )

@@ -14,6 +14,8 @@ Transport: streamable-http (required for Docker/containerised deployment).
 Port: 8002 (internal only — not exposed to the internet).
 """
 
+import os
+
 from mcp.server.fastmcp import FastMCP
 
 from tools.calculators import (
@@ -27,7 +29,7 @@ from tools.calculators import (
 )
 from tools.knowledge import query_knowledge_base
 
-mcp = FastMCP("sg-property-tools", log_level="INFO", host="0.0.0.0", port=8002)
+mcp = FastMCP("sg-property-tools", log_level="INFO", host="0.0.0.0", port=int(os.getenv("MCP_PORT", "8002")))
 # ── Register tools ────────────────────────────────────────────────────────────
 
 mcp.tool()(query_knowledge_base)

@@ -167,4 +167,9 @@ async def chat_inspect(req: ChatRequest) -> dict:
         "agents_called": result.get("agent_plan", []),
         "completed_agents": result.get("completed_agents", []),
         "answer": answer,
+        "retrieved_chunks": {
+            "eligibility": result.get("eligibility_chunks") or [],
+            "financial":   result.get("financial_chunks") or [],
+            "advisory":    result.get("advisory_chunks") or [],
+        },
     }
