@@ -2,6 +2,7 @@ import hashlib
 import re
 
 from scrapy.exceptions import DropItem
+from sqlalchemy import func
 
 from config.database import SessionLocal
 from config.logger import get_logger
@@ -76,6 +77,7 @@ class S3Pipeline:
                         item["raw_html"],
                         source_url=item.get("url", ""),
                         source_name=item.get("source_code", ""),
+                        content_selectors=item.get("content_selectors") or [],
                     )
                     text_with_tables = _merge_tables_into_text(extracted.text, extracted.tables)
                     item["raw_text"] = _sanitize_text(text_with_tables.strip())
@@ -173,10 +175,11 @@ class PostgresPipeline:
         self.seen_urls = set()
         self.source_id = None
 
-    def open_spider(self):
+    # `spider` is optional: older Scrapy versions pass it positionally, newer ones may not.
+    def open_spider(self, spider=None):
         self.db = SessionLocal()
 
-    def close_spider(self):
+    def close_spider(self, spider=None):
         if self.db and self.source_id:
             pages_deleted = self._mark_deleted_pages()
             if self.stats:

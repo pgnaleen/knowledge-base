@@ -1,6 +1,6 @@
 import boto3
 from config.database import SessionLocal
-from config.models import RawDocument, ProcessedChunk, CrawlJob
+from config.models import RawDocument, ProcessedChunk, CrawlJob, TaskExecution
 from config.settings import settings
 
 
@@ -10,9 +10,13 @@ def clean_database():
     try:
         deleted_chunks = db.query(ProcessedChunk).delete()
         deleted_docs = db.query(RawDocument).delete()
-        deleted_crawals = db.query(CrawlJob).delete()
+        deleted_crawls = db.query(CrawlJob).delete()
+        deleted_tasks = db.query(TaskExecution).delete()
         db.commit()
-        print(f"Deleted {deleted_chunks} chunks, {deleted_docs} documents, and {deleted_crawals} crawl jobs from PostgreSQL.")
+        print(
+            f"Deleted {deleted_chunks} chunks, {deleted_docs} documents, {deleted_crawls} crawl jobs, "
+            f"and {deleted_tasks} task executions from PostgreSQL."
+        )
     except Exception as e:
         print(f"Error cleaning database: {e}")
         db.rollback()

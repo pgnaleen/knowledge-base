@@ -8,6 +8,8 @@ To exclude a source from GenericSpider (e.g. when moving to a custom spider),
 add its code to CUSTOM_SPIDER_CODES.
 """
 
+import scrapy
+
 from crawlers.base import BaseCrawler
 
 CUSTOM_SPIDER_CODES = {"hdb", "ura", "iras", "mas", "cpf"}
@@ -52,14 +54,22 @@ class GenericSpider(BaseCrawler):
                             PageMethod("wait_for_load_state", wait_event)
                         ]
 
-                    yield self.make_requests_from_url(url, meta=meta)
+                    yield scrapy.Request(url, callback=self.handle_response, meta=meta)
         finally:
             db.close()
 
     def handle_response(self, response):
         """Set per-request source config before delegating to base."""
         # GenericSpider handles multiple sources; switch config per request
-        self.source_config = response.meta.get("crawl_config", {})
-        self.source_name = response.meta.get("source_code", "unknown")
+        source_code = response.meta.get("source_code", "unknown")
+        crawl_config = response.meta.get("crawl_config", {})
+        self.source_config = crawl_config
+        self.source_name = source_code
         # Delegate to base: parse_document, _follow_links, etc.
-        yield from super().handle_response(response)
+        # Followed links must carry the source identity forward, otherwise the
+        # next response would be processed with an empty config.
+        for result in super().handle_response(response):
+            if isinstance(result, scrapy.Request):
+                result.meta.setdefault("source_code", source_code)
+                result.meta.setdefault("crawl_config", crawl_config)
+            yield result

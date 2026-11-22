@@ -86,6 +86,7 @@ class BaseCrawler(scrapy.Spider):
                 content_type="html",
                 raw_html=response.body,
                 content_hash="",
+                content_selectors=self.source_config.get("content_selectors", []),
             )
 
     def start_requests(self):
