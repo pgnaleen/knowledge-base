@@ -10,7 +10,6 @@ from config.models import RawDocument, Source
 from config.storage import delete_s3_object, upload_raw_html, upload_raw_pdf
 from processors.html_extractor import HTMLExtractor
 from processors.pdf_extractor import PDFExtractor
-from processors.table_extractor import TableExtractor
 
 logger = get_logger(__name__)
 
@@ -79,8 +78,8 @@ class S3Pipeline:
                         source_name=item.get("source_code", ""),
                         content_selectors=item.get("content_selectors") or [],
                     )
-                    text_with_tables = _merge_tables_into_text(extracted.text, extracted.tables)
-                    item["raw_text"] = _sanitize_text(text_with_tables.strip())
+                    # Extractors already place tables inline as Markdown; do not append them again.
+                    item["raw_text"] = _sanitize_text(extracted.text.strip())
                     item["content_hash"] = hashlib.sha256(_normalize_text(extracted.text).encode("utf-8")).hexdigest()
                     logger.info("hash.created", url=item.get("url"), source=item["source_code"], hash=item["content_hash"][:12])
                     is_empty = not extracted.text.strip()
@@ -113,8 +112,8 @@ class S3Pipeline:
                         source_url=item.get("url", ""),
                         source_name=item.get("source_code", ""),
                     )
-                    text_with_tables = _merge_tables_into_text(extracted.text, extracted.tables)
-                    item["raw_text"] = _sanitize_text(text_with_tables.strip())
+                    # Extractors already place tables inline as Markdown; do not append them again.
+                    item["raw_text"] = _sanitize_text(extracted.text.strip())
                     item["content_hash"] = hashlib.sha256(_normalize_text(extracted.text).encode("utf-8")).hexdigest()
                     logger.info("hash.created", url=item.get("url"), source=item["source_code"], hash=item["content_hash"][:12])
                     is_empty = not extracted.text.strip()
