@@ -26,29 +26,6 @@ def _sanitize_text(text: str) -> str:
     return text.replace("\x00", "") if text else ""
 
 
-def _merge_tables_into_text(text: str, tables: list) -> str:
-    """Append tables as markdown to the end of extracted text.
-
-    Tables are converted to GitHub-flavored markdown and appended after the main text
-    to preserve structure for downstream chunking and embedding.
-    """
-    if not tables:
-        return text
-
-    table_extractor = TableExtractor()
-    markdown_tables = []
-    for table in tables:
-        md = table_extractor.to_markdown(table)
-        if md:
-            # Wrap table in structural markers
-            markdown_tables.append(f"[TABLE_START]\n{md}\n[TABLE_END]")
-
-    if not markdown_tables:
-        return text
-
-    return text + "\n\n" + "\n\n".join(markdown_tables)
-
-
 class S3Pipeline:
     @classmethod
     def from_crawler(cls, crawler):

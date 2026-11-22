@@ -1,5 +1,7 @@
 """Document chunking — splits ExtractedDocument into embeddable DocumentChunk objects."""
 
+import re
+
 import tiktoken
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
@@ -13,13 +15,18 @@ _DEFAULT_CHUNK_SIZE = 512
 _DEFAULT_CHUNK_OVERLAP = 64
 _enc = tiktoken.get_encoding("cl100k_base")
 
+_TABLE_LINE = re.compile(r"^\s*\|")
+_TABLE_CAPTION_LINE = re.compile(r"^\*\*Table: ")
+
 
 class DocumentChunker:
     """Splits an ExtractedDocument into embeddable DocumentChunk objects.
 
     Text is split using LangChain's RecursiveCharacterTextSplitter with tiktoken
     (cl100k_base) encoding so token counts match the OpenAI embedding model.
-    Each ExtractedTable is appended as a separate Markdown-formatted chunk.
+    Markdown tables embedded in the text (placed inline by the extractors) are kept
+    atomic: each becomes its own ``chunk_type="table"`` chunk, and tables larger than
+    ``chunk_size`` are split by row groups with the header row repeated in every piece.
     """
 
     def __init__(
@@ -54,31 +61,34 @@ class DocumentChunker:
         counter = 0
 
         if doc.text.strip():
-            pieces = self._splitter.split_text(doc.text)
-            piece_offsets = self._compute_piece_offsets(doc.text, pieces)
-            for piece, offset in zip(pieces, piece_offsets):
-                heading_path = self._heading_path_at(offset, doc.text, doc.headings)
-                chunk_meta = {**base_meta, "chunk_index": counter, "chunk_type": "text"}
-                chunks.append(
-                    DocumentChunk(
-                        chunk_text=piece,
-                        chunk_index=counter,
-                        chunk_type="text",
-                        heading_path=heading_path,
-                        metadata=chunk_meta,
-                        source_url=doc.source_url,
-                        source_name=doc.source_name,
-                        content_type=doc.content_type,
-                        word_count=len(piece.split()),
-                        token_count=len(_enc.encode(piece)),
-                    )
-                )
-                counter += 1
+            for kind, seg_offset, seg_text in self._split_segments(doc.text):
+                if kind == "text":
+                    if not seg_text.strip():
+                        continue
+                    pieces = self._splitter.split_text(seg_text)
+                    offsets = self._compute_piece_offsets(seg_text, pieces)
+                    for piece, local in zip(pieces, offsets):
+                        heading_path = self._heading_path_at(
+                            seg_offset + local, doc.text, doc.headings
+                        )
+                        chunks.append(
+                            self._make_chunk(doc, base_meta, counter, "text", piece, heading_path)
+                        )
+                        counter += 1
+                else:
+                    heading_path = self._heading_path_at(seg_offset, doc.text, doc.headings)
+                    for part in self._split_table_markdown(seg_text):
+                        chunks.append(
+                            self._make_chunk(
+                                doc, base_meta, counter, "table", part, heading_path
+                            )
+                        )
+                        counter += 1
 
         for table in doc.tables:
             md = TableExtractor.to_markdown(table)
-            if not md:
-                continue
+            if not md or md in doc.text:
+                continue  # empty, or already emitted as an inline table chunk
             chunk_meta = {
                 **base_meta,
                 "chunk_index": counter,
@@ -111,6 +121,83 @@ class DocumentChunker:
             total_chunks=len(chunks),
         )
         return chunks
+
+    def _make_chunk(
+        self,
+        doc: ExtractedDocument,
+        base_meta: dict,
+        index: int,
+        chunk_type: str,
+        text: str,
+        heading_path: list[dict],
+    ) -> DocumentChunk:
+        return DocumentChunk(
+            chunk_text=text,
+            chunk_index=index,
+            chunk_type=chunk_type,
+            heading_path=heading_path,
+            metadata={**base_meta, "chunk_index": index, "chunk_type": chunk_type},
+            source_url=doc.source_url,
+            source_name=doc.source_name,
+            content_type=doc.content_type,
+            word_count=len(text.split()),
+            token_count=len(_enc.encode(text)),
+        )
+
+    @staticmethod
+    def _split_segments(text: str) -> list[tuple[str, int, str]]:
+        """Split text into ("text" | "table", start_offset, content) segments.
+
+        A table is a run of Markdown table lines (starting with ``|``), optionally
+        preceded by a ``**Table: caption**`` line.
+        """
+        lines = text.splitlines(keepends=True)
+        segments: list[tuple[str, int, str]] = []
+        pos = 0
+        cur_kind: str | None = None
+        cur_start = 0
+        cur: list[str] = []
+        for i, line in enumerate(lines):
+            is_table = bool(_TABLE_LINE.match(line)) or (
+                bool(_TABLE_CAPTION_LINE.match(line))
+                and i + 1 < len(lines)
+                and bool(_TABLE_LINE.match(lines[i + 1]))
+            )
+            kind = "table" if is_table else "text"
+            if kind != cur_kind:
+                if cur:
+                    segments.append((cur_kind, cur_start, "".join(cur)))  # type: ignore[arg-type]
+                cur_kind, cur_start, cur = kind, pos, []
+            cur.append(line)
+            pos += len(line)
+        if cur:
+            segments.append((cur_kind, cur_start, "".join(cur)))  # type: ignore[arg-type]
+        return segments
+
+    def _split_table_markdown(self, md: str) -> list[str]:
+        """Return the table as one chunk, or row-group chunks (header repeated) if too large."""
+        md = md.strip("\n")
+        if len(_enc.encode(md)) <= self._chunk_size:
+            return [md]
+        lines = md.split("\n")
+        sep_idx = next(
+            (i for i, ln in enumerate(lines) if re.match(r"^\s*\|(\s*:?-{3,}:?\s*\|)+\s*$", ln)),
+            None,
+        )
+        if sep_idx is None:
+            return [md]
+        header, rows = lines[: sep_idx + 1], lines[sep_idx + 1 :]
+        parts: list[str] = []
+        current: list[str] = []
+        for row in rows:
+            candidate = "\n".join(header + current + [row])
+            if current and len(_enc.encode(candidate)) > self._chunk_size:
+                parts.append("\n".join(header + current))
+                current = []
+            current.append(row)
+        if current:
+            parts.append("\n".join(header + current))
+        return parts or [md]
 
     @staticmethod
     def _compute_piece_offsets(full_text: str, pieces: list[str]) -> list[int]:

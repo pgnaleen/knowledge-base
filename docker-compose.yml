@@ -188,7 +188,23 @@ services:
         condition: service_healthy
     command: ["celery", "-A", "config.celery_app", "beat", "--loglevel=info"]
 
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: KB-Pipeline-Grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 
 volumes:
   postgres_data:
   minio-data:
+  grafana_data:

@@ -118,25 +118,29 @@ class EmbeddingPipeline:
             )
             return 0
 
+        # Dual-write: pgvector always receives the vectors (it is the query fallback and
+        # keeps working if Pinecone is down); Pinecone is the primary when available.
+        # Both stores use the same "{source}-{db_id}" vector id, so either id_map is valid.
         id_map: dict = {}
-        store_used = "pgvector"
+        stores_written: list[str] = []
         if self._pinecone_store is not None:
             try:
                 logger.info("pinecone.storing", source=source_code or "all", chunks=len(results))
                 id_map = self._pinecone_store.upsert(results, db_ids)
-                store_used = "pinecone"
+                stores_written.append("pinecone")
             except Exception as exc:
                 logger.warning("pipeline.pinecone_upsert_failed", error=str(exc))
-                logger.info(
-                    "pgvector.storing",
-                    source=source_code or "all",
-                    chunks=len(results),
-                    reason="pinecone_fallback",
-                )
-                id_map = self._pgvector_store.upsert(results, db_ids)
-        else:
+
+        try:
             logger.info("pgvector.storing", source=source_code or "all", chunks=len(results))
-            id_map = self._pgvector_store.upsert(results, db_ids)
+            pg_map = self._pgvector_store.upsert(results, db_ids)
+            id_map = id_map or pg_map
+            stores_written.append("pgvector")
+        except Exception as exc:
+            if not stores_written:
+                raise  # nothing stored anywhere: leave chunks un-embedded so the next run retries
+            logger.warning("pipeline.pgvector_upsert_failed", error=str(exc))
+        store_used = "+".join(stores_written)
 
         # Archive embeddings to S3
         batch_id = date.today().isoformat()

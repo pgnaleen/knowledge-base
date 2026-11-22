@@ -52,6 +52,7 @@ def sync_sources_config():
                 "tag_config":               source_cfg.get("tag_config", {}),
                 "estimated_pages":          source_cfg.get("estimated_pages", None),
                 "content_types":            source_cfg.get("content_types", []),
+                "schedule":                 source_cfg.get("schedule", {}),
             }
 
             source.crawl_config = crawl_config

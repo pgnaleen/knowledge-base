@@ -12,6 +12,19 @@ _PINECONE_UPSERT_BATCH = 100  # Pinecone recommended max per upsert call
 logger = get_logger("pinecone_store")
 
 
+def _effective_date_epoch(value: str) -> int | None:
+    """Convert an ISO 'YYYY-MM-DD' effective date to epoch seconds (UTC)."""
+    from datetime import datetime, timezone
+
+    if not value:
+        return None
+    try:
+        dt = datetime.strptime(value[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    return int(dt.timestamp())
+
+
 class PineconeStore:
     """Upserts EmbeddingResult vectors into a Pinecone serverless index.
 
@@ -178,8 +191,15 @@ class PineconeStore:
         chunk = result.chunk
         m = chunk.metadata or {}
         tags = m.get("tags", {})
-        return {
+        meta = {
             "source_name": chunk.source_name,
             "property_types": tags.get("property_type", []),
             "citizenship_types": tags.get("citizenship", []),
+            "topics": tags.get("topic", []),
+            "chunk_type": chunk.chunk_type,
         }
+        # Epoch seconds so Pinecone range filters ($gte/$lte) work; omitted when unknown.
+        ts = _effective_date_epoch(m.get("effective_date", ""))
+        if ts is not None:
+            meta["effective_date_ts"] = ts
+        return meta

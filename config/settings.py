@@ -38,6 +38,13 @@ class Settings(BaseSettings):
     crawl_respect_robots_txt: bool = True
     crawl_max_retries: int = 3
 
+    # Admin API (/crawl, /process, /embed, /jobs, /stats, /admin/*): when set, callers must send
+    # this value in the X-API-Key header. Empty = open (local dev only).
+    admin_api_key: str = ""
+
+    # Retrieval
+    bm25_refresh_seconds: int = 300  # rebuild BM25 index when older than this (0 = never)
+
     # Logging
     log_level: str = "INFO"
 

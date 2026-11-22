@@ -25,7 +25,7 @@ dependencies = [
     
 
     # Database
-    "sqlalchemy>=2.0",
+    "sqlalchemy>=2.0,<2.1",  # 2.1 defaults postgresql:// to psycopg3; we ship psycopg2
     "alembic>=1.13",
     "psycopg2-binary>=2.9",
     "pgvector>=0.3",

@@ -110,12 +110,12 @@ All runtime dependencies are declared in [pyproject.toml](pyproject.toml).
 | **SQLAlchemy 2** + **psycopg2-binary** | [config/database.py](config/database.py), [config/models.py](config/models.py) | ORM and PostgreSQL driver |
 | **Alembic** | [alembic/versions/](alembic/versions/) | Schema migrations. Migration 001 also seeds the 5 sources |
 | **boto3** | [config/storage.py](config/storage.py) | S3 client for MinIO (locally) or AWS S3: raw HTML/PDF and embedding archives |
-| **FastAPI** + **uvicorn** | [api/](api/) | Retrieval API (`/health`, `/retrieve`) |
+| **FastAPI** + **uvicorn** | [api/](api/) | `/retrieve` plus pipeline control and monitoring endpoints (`/crawl`, `/process`, `/embed`, `/jobs`, `/stats`, `/admin/reindex-bm25`) |
 | **Celery[redis]** + **Redis** | [config/celery_app.py](config/celery_app.py), [tasks/](tasks/) | Celery Beat triggers scheduled crawls; the worker runs the pipeline. Redis is the broker and result backend |
 | **pydantic** / **pydantic-settings** | [config/settings.py](config/settings.py), [api/schemas.py](api/schemas.py) | Typed settings from `.env`; API request/response validation |
 | **structlog** | [config/logger.py](config/logger.py) | Structured JSON logs with per-run context (`run_id`, `source`, `url`) |
-| **httpx** | [config/notifications.py](config/notifications.py) | Slack webhook on final crawl-task failure |
-| **PyYAML** | [config/celery_app.py](config/celery_app.py), [config/sync_sources.py](config/sync_sources.py) | Reads [config/sources.yml](config/sources.yml) (source definitions and cron schedules) |
+| **httpx** | [config/notifications.py](config/notifications.py) | Slack webhook on final crawl-task failure; also used by [eval/retrieval_eval.py](eval/retrieval_eval.py) to call `/retrieve` |
+| **PyYAML** | [config/celery_app.py](config/celery_app.py), [config/sync_sources.py](config/sync_sources.py) | Reads [config/sources.yml](config/sources.yml) (source definitions and cron schedules); the DB copy is authoritative at runtime |
 | **python-dotenv** | settings | `.env` loading |
 
 ### Development
@@ -125,7 +125,8 @@ All runtime dependencies are declared in [pyproject.toml](pyproject.toml).
 | **pytest**, **pytest-cov**, **pytest-asyncio** | Unit tests. Coverage gate is 80% (`--cov-fail-under=80`) |
 | **ruff**, **black**, **mypy** | Lint, format and type checks (line length 100) |
 | **GitHub Actions** | [.github/workflows/ci.yml](.github/workflows/ci.yml): ruff, black --check and unit tests on push/PR to `main`/`master` |
-| **Docker Compose** | Runs the app, API, worker, beat, Postgres, Redis and MinIO |
+| **Docker Compose** | Runs the app, API, worker, beat, Postgres, Redis, MinIO and Grafana |
+| **Grafana** | Dashboard over Postgres: crawl status, document/chunk counts, embedding coverage, task history |
 
 ---
 
@@ -165,8 +166,12 @@ api/
   retrieval.py             RetrievalService (vector / hybrid + RRF)
   query_expander.py        LLM phrasings + entity extraction
   metadata_filter_inference.py   Rule-based filter inference from the query
-tasks/pipeline_tasks.py    Celery task wrapping run_full_pipeline()
-alembic/                   Migrations 001–007
+tasks/pipeline_tasks.py    Celery tasks (crawl in a subprocess, process, embed) + task_executions bookkeeping
+eval/                      retrieval_eval.py (hit@k, MRR, fact support, filters, latency) + testset.csv
+grafana/                   Provisioned datasource + dashboard (real tables)
+backfill_pgvector.py       Restore pgvector rows from the S3 embedding archive
+ingest_offline_docs.py     Ingest local HTML/PDF snapshots into an isolated eval DB/index
+alembic/                   Migrations 001–008 (008 = HNSW index via halfvec)
 tests/unit, tests/integration
 docs/                      Architecture deep-dives and the original task breakdown
 ```
@@ -198,6 +203,7 @@ Add your keys to `.env` before crawling. All Python runs **inside** the `KB-Pipe
 | Service | URL |
 |---|---|
 | Retrieval API | http://localhost:8000 (`/docs` for Swagger) |
+| Grafana | http://localhost:3000 (admin / admin), dashboard "KB Pipeline Overview" |
 | MinIO console | http://localhost:9001 (minioadmin / minioadmin) |
 | PostgreSQL | localhost:5432 (kb_user / kb_pass, db `kb_pipeline_db`) |
 | Redis | localhost:6379 |
@@ -249,6 +255,8 @@ $APP ruff check . && $APP black --check .
 | `CRAWL_DELAY`, `CRAWL_USER_AGENT`, `CRAWL_RESPECT_ROBOTS_TXT`, `CRAWL_MAX_RETRIES` | Global crawl defaults (each source can override them in `sources.yml`) |
 | `SLACK_WEBHOOK_URL` | Failure notifications (optional) |
 | `CELERY_TIMEZONE` | Default `Asia/Singapore` |
+| `ADMIN_API_KEY` | When set, admin endpoints require the `X-API-Key` header (empty = open, local dev only) |
+| `BM25_REFRESH_SECONDS` | BM25 index auto-rebuild age (default 300, 0 = never) |
 | `LOG_LEVEL` | structlog level |
 
 ---
@@ -260,7 +268,7 @@ Entry point: `run_full_pipeline()` in [run_pipeline.py](run_pipeline.py). It is 
 ### Step 0: Source configuration
 1. [config/sources.yml](config/sources.yml) defines, for each source: `start_urls`, `allowed_domains`, `target_prefixes` / `skip_prefixes`, `blocked_subdomains`, `js_rendering`, `crawl_delay`, `content_selectors`, `content_keywords_filter`, `tag_config` (keyword → tag rules) and a `schedule` (cron).
 2. [config/sync_sources.py](config/sync_sources.py) upserts this into `sources.crawl_config` (JSONB). **The crawlers read config only from the database**, not from the YAML file.
-3. [config/celery_app.py](config/celery_app.py) builds the Celery Beat schedule from the YAML `schedule` keys. The default is a full crawl on Sunday at 02:00 SGT and an incremental crawl daily at 06:00 SGT.
+3. [config/celery_app.py](config/celery_app.py) builds the Celery Beat schedule from `sources.crawl_config['schedule']` in the DB (the YAML is only a fallback for a fresh, un-synced database). The default is a full crawl on Sunday at 02:00 SGT and an incremental crawl daily at 06:00 SGT.
 
 ### Stage 1: Crawl ([crawlers/runner.py](crawlers/runner.py) → `run_crawlers`)
 1. For each source code, create a `crawl_jobs` row (`status=running`) and schedule its spider. When no source is given, the `generic` spider is scheduled too.
@@ -279,7 +287,7 @@ Entry point: `run_full_pipeline()` in [run_pipeline.py](run_pipeline.py). It is 
 5. **`S3Pipeline`** ([crawlers/pipelines.py](crawlers/pipelines.py)):
    - Upload the raw file to `raw-html/` or `raw-pdf/{source}/{date}/{md5(url)[:12]}`.
    - Run the full `HTMLExtractor` or `PDFExtractor` (below).
-   - Append tables as Markdown wrapped in `[TABLE_START]`/`[TABLE_END]`.
+   - Use the extractor text as is: tables are already placed **inline, in document position, as Markdown** (never appended a second time).
    - Set `raw_text` and `content_hash = sha256(normalised text)`.
    - Record `extraction_flags` (warnings, word count, table count, title, headings, `needs_ocr`, `used_fallback`).
 6. **`PostgresPipeline`**:
@@ -296,21 +304,21 @@ Entry point: `run_full_pipeline()` in [run_pipeline.py](run_pipeline.py). It is 
 - [HTMLExtractor](processors/html_extractor.py):
   - parses with BeautifulSoup and removes noise tags and classes;
   - picks the content node via `content_selectors`, then `main`/`article`/`role=main`, then `body`;
-  - collects h1–h6 headings and tables (via `TableExtractor`), and normalises whitespace.
+  - walks the content in document order, emitting each table as Markdown at its position, plus h1–h6 headings, and normalises whitespace.
 - [PDFExtractor](processors/pdf_extractor.py):
-  - extracts text and tables with pdfplumber, falling back to PyMuPDF on error or empty text;
+  - extracts per-page text with pdfplumber, placing detected tables (Markdown) at their vertical position; falls back to PyMuPDF on error or empty text (tables are then appended at the end);
   - detects scanned PDFs (few words per page, large image coverage), which sets `needs_ocr`.
 
 ### Stage 2: Process ([processors/runner.py](processors/runner.py) → `process_pending_documents`)
 For each `raw_documents` row with `status=pending`:
 1. Rebuild an `ExtractedDocument` from `raw_text` and `extraction_flags` (title, headings). No re-download is needed.
 2. **[MetadataExtractor](processors/metadata_extractor.py)** produces `title`, `source_agency`, `section` (first heading), `effective_date` (regex date patterns → ISO) and `tags` (`property_type`, `citizenship`, `topic`, matched with the source's `tag_config`).
-3. **[DocumentChunker](processors/chunker.py)** uses `RecursiveCharacterTextSplitter.from_tiktoken_encoder(chunk_size=512, chunk_overlap=64, separators=["\n\n", "\n", " "])`. Each chunk gets:
+3. **[DocumentChunker](processors/chunker.py)** first separates inline Markdown tables from prose. Each table stays atomic as a `chunk_type="table"` chunk (tables over 512 tokens are split by row groups with the header repeated). Prose uses `RecursiveCharacterTextSplitter.from_tiktoken_encoder(chunk_size=512, chunk_overlap=64, separators=["\n\n", "\n", " "])`. Each chunk gets:
    - the document metadata plus `chunk_index` and `chunk_type`;
    - a `heading_path` breadcrumb, computed from the chunk's offset in the text;
    - an exact tiktoken count.
 4. **[ChunkValidator](processors/validator.py)** applies two levels of checks:
-   - **Errors (the chunk is dropped):** empty text, NUL bytes, invalid `chunk_type`, fewer than 50 or more than 600 tokens, boilerplate-only, duplicate within the document (SHA-256).
+   - **Errors (the chunk is dropped):** empty text, NUL bytes, invalid `chunk_type`, fewer than 50 tokens (tables exempt) or more than 600 tokens, boilerplate-only, duplicate within the document (SHA-256).
    - **Warnings (logged, chunk kept):** word-count mismatch, missing URL/source/metadata keys, malformed `heading_path`, possible mid-sentence split.
    - Surviving chunks are re-indexed from 0.
 5. Delete the document's old chunks, insert the new `processed_chunks` rows, and set the document to `status=processed`. On an exception the status becomes `failed` and the traceback goes into `error_message`.
@@ -322,8 +330,8 @@ For each `raw_documents` row with `status=pending`:
    - calls OpenRouter with tenacity retries, switching to OpenAI for the rest of the run if OpenRouter keeps failing;
    - logs token usage per batch for cost tracking.
 3. **Upsert**:
-   - Pinecone, into namespaces `{source}` and `all`, with metadata `source_name`, `property_types` and `citizenship_types`;
-   - pgvector **only if Pinecone is unavailable or fails** (see [Known issues](#8-known-issues)).
+   - Pinecone, into namespaces `{source}` and `all`, with metadata `source_name`, `property_types`, `citizenship_types`, `topics`, `chunk_type`, `effective_date_ts`;
+   - pgvector **always** (dual-write, same `{source}-{db_id}` vector ids), so the fallback is a real backup. If one store fails the other still serves; if both fail the chunks stay un-embedded and are retried on the next run.
 4. Archive each embedding as JSON to S3 at `processed/embeddings/{date}/{vector_id}.json`.
 5. Write `processed_chunks.embedding_id`.
 
@@ -337,7 +345,7 @@ For each `raw_documents` row with `status=pending`:
 4. **For each phrasing**: embed it, then search.
    - `vector` mode: Pinecone, using one source's namespace when a single source is filtered, otherwise `all` with a `$in` filter. Falls back to pgvector.
    - `hybrid` mode (the default): take the top `5×top_k` from vector search and from BM25 (filtered the same way), fuse them with **Reciprocal Rank Fusion** `1/(60+rank_v) + 1/(60+rank_bm25)`, then load the chunk text and metadata from Postgres.
-5. De-duplicate across phrasings by `(source_url, chunk_index)`, keeping the highest score, and return the top `top_k`.
+5. Combine phrasings by `(source_url, chunk_index)`: in hybrid mode scores are summed (RRF across phrasings) and normalised to (0, 1]; in vector mode the best cosine score is kept. Return the top `top_k`.
 6. The response includes `inferred_filters`, `applied_filters`, a timing `trace` and `store_used`.
 
 ---
@@ -350,7 +358,7 @@ For each `raw_documents` row with `status=pending`:
 | `raw_documents` | `source_id`, `url` (unique per source), `content_hash`, `content_type`, `raw_text`, `s3_path`, `status` (pending/processed/failed/deleted), `needs_ocr`, `extraction_flags`, `last_seen_at` |
 | `processed_chunks` | `document_id` (cascade delete), `chunk_text`, `chunk_index`, `token_count`, `embedding_id`, `embedding vector(3072)`, `metadata_json` |
 | `crawl_jobs` | per-source crawl run: `job_type`, `status`, `pages_found/new/changed/deleted/errored` |
-| `task_executions` | Celery task history (migration 007). The table exists, but nothing writes to it yet on `dev` ([Next steps](#10-next-steps-and-the-libraries-each-one-needs)) |
+| `task_executions` | Celery task history (migration 007), written by every Celery task and read by `GET /jobs` |
 
 MinIO bucket `sg-property-kb`:
 ```
@@ -364,57 +372,58 @@ processed/embeddings/{YYYY-MM-DD}/{vector_id}.json
 
 ## 7. Branches: what lives where
 
-Reviewed on 2026-11-22. `dev` is the most complete branch for the KB pipeline itself, and `origin/master` is an ancestor of it.
+Reviewed and merged on 2026-11-22. `dev` is the integration branch.
 
-| Branch | Contents | Status relative to `dev` |
+| Branch | Contents | Status |
 |---|---|---|
-| `dev` | This pipeline (crawl → process → embed → retrieve, scheduling) | Baseline |
-| `master` | Older snapshot | Fully contained in `dev` |
-| `features` | Improved HTML/PDF extraction: tables placed **inline at their document position** instead of appended; PDF reading order rebuilt from word coordinates | **Not merged** (conflicts with `dev`'s `pdf_extractor.py`). It also assumes tables are *not* appended again by `crawlers/pipelines.py::_merge_tables_into_text`, so a naive merge would duplicate every table. Planned as a next step |
-| `property-advisory-ai-advisory` | Monorepo (unrelated history): `KB-Pipeline/` (a later copy of this code), `sg-property-agent/` (incl. an MCP server), `testing/` (QA plan, metrics, datasets, DeepEval RAG evaluation, agent routing tests) | Partially ported (below) |
-| `sg-property-agent` | Downstream chat agent: LangGraph + FastAPI backend, React frontend, WhatsApp channel, stamp-duty calculator | Separate application; intentionally **not** merged into this repo |
+| `dev` | This pipeline | Baseline |
+| `master` | Older snapshot | Contained in `dev` |
+| `features` | Improved HTML/PDF extraction (inline tables, coordinate-based PDF reading order) | **Merged** into `dev`. The conflict in `pdf_extractor.py` was resolved by keeping `dev`'s error tracking and richer scanned-PDF detection, and dropping debug prints and `[PAGE_START]` markers |
+| `property-advisory-ai-advisory` | Monorepo with unrelated history (`KB-Pipeline/`, `sg-property-agent/`, `testing/`) | KB-Pipeline features **ported by hand** (below); a real merge would import the whole monorepo |
+| `sg-property-agent` | Chat agent (LangGraph backend, React frontend, WhatsApp, stamp-duty calculator) | Separate application; not part of this repo |
 
-### Ported into `dev` from `property-advisory-ai-advisory/KB-Pipeline`
+### Ported or built from `property-advisory-ai-advisory`
 
-| Change | Why it was needed |
+| Feature | Where |
 |---|---|
-| `from sqlalchemy import func` in [crawlers/pipelines.py](crawlers/pipelines.py) | `func.now()` was used without an import. Every re-crawl of an **unchanged** page raised `NameError`, so the item was dropped and `last_seen_at` never updated |
-| `content_selectors` passed spider → `CrawlItem` → `HTMLExtractor.extract()` | The per-source selectors in `sources.yml` were ignored by the real extractor, which always fell back to generic `main`/`article`/`body` |
-| `open_spider(self, spider=None)` / `close_spider(self, spider=None)` | Scrapy versions allowed by `scrapy>=2.11` pass `spider` positionally, and the no-argument signature raises `TypeError` there. Now works with and without the argument |
-| Migration [007_add_task_executions.py](alembic/versions/007_add_task_executions.py) + `TaskExecution` model | `dev` had **two Alembic heads** (`006` and `9d14d2974166` both revise `005`), so `alembic upgrade head` in `setup.sh` failed. 007 is the merge revision with the same id as the monorepo, so databases from both branches stay compatible |
-| `clean_data.py` also clears `task_executions` | Keeps the reset script in sync with the schema |
+| Job-control API and history | `POST /crawl`, `/process`, `/embed`, `GET /jobs`, `GET /config` in [api/app.py](api/app.py); Celery tasks writing `task_executions` in [tasks/pipeline_tasks.py](tasks/pipeline_tasks.py); migration 007 |
+| Scheduling from the DB | [config/celery_app.py](config/celery_app.py) reads `crawl_config['schedule']`; [config/sync_sources.py](config/sync_sources.py) now syncs it |
+| Reliable repeated crawls | The crawl task runs `run_pipeline.py` in a subprocess. The monorepo's in-process `CrawlerRunner` + `reactor.run()` would still fail on the second crawl in one worker |
+| Grafana | [grafana/](grafana/) plus a compose service. The dashboard was **rewritten** against real tables (the original queried non-existent `crawl_runs` / `embedding_stats`) |
+| Offline eval ingestion, QA docs, Q&A set | [ingest_offline_docs.py](ingest_offline_docs.py), [docs/QA_METRICS.md](docs/QA_METRICS.md), [docs/QA_TESTING_GUIDE.md](docs/QA_TESTING_GUIDE.md), [eval/testset.csv](eval/testset.csv) |
+| Bug fixes | Missing `func` import, `content_selectors` plumbing, `open_spider(spider=None)` signature, merge of the two Alembic heads, `clean_data.py` clearing `task_executions` |
 
-Fixed on `dev` (missing from all branches): `GenericSpider` called the removed Scrapy API `make_requests_from_url(url, meta=...)` and lost the source config on followed links. It now yields `scrapy.Request(...)` and propagates `source_code`/`crawl_config` in `meta`.
+Deliberately **not** taken: `config/settings.py` (typo `redis://l ocalhost`), the verbose INFO logging additions, the rewrite of migration 001 (editing an applied migration does not update existing databases), the commented-out `test_chunker.py`, and the DeepEval / agent-routing suites (they target the chat agent, not the KB).
 
-### Not ported (yet), and why
-
-| Item (location in `property-advisory-ai-advisory`) | Reason |
-|---|---|
-| API endpoints `/crawl`, `/process`, `/embed`, `/jobs`, `/config` + Celery tasks that write `task_executions` (`KB-Pipeline/api/app.py`, `api/schemas.py`, `tasks/pipeline_tasks.py`) | Useful (covers the planned monitoring endpoint, task 3.7). Larger change that needs integration testing against the running stack; next step #1 |
-| DB-driven schedule, removal of `sources.yml`/`sync_sources.py`, source config seeded inside migration 001 | Editing an already-applied migration doesn't update existing databases. Should be a new migration (next step #6) |
-| CrawlerRunner + manual reactor in `crawlers/runner.py` | Fixes "ReactorNotRestartable" when Celery runs several crawls in one worker process. Needs testing with Celery; next step #2 |
-| Grafana dashboard (`KB-Pipeline/grafana/`) | Queries tables that don't exist (`crawl_runs`, `embedding_stats`) and has no compose service. Rebuild against the real schema (next step #4) |
-| Verbose `logger.info` additions (spiders, retrieval) | Noise at INFO level. Better as DEBUG, or as metrics |
-| `tests/unit/test_chunker.py`, expanded `test_base_spider.py` | The chunker file is mostly commented-out code with a personal local path; the spider tests target the monorepo's spider API |
-| `ingest_offline_docs.py`, `testing/` folder | Evaluation tooling. Adopt together with the verification plan (§9) |
-| `config/settings.py` | **Do not port**: it contains a typo regression `redis://l ocalhost:6379/0` |
+Also fixed on `dev` (not fixed on any other branch): `GenericSpider` used the removed Scrapy API `make_requests_from_url` and lost the source config on followed links. SQLAlchemy is now pinned `<2.1`, because 2.1 defaults `postgresql://` to psycopg3 while we ship psycopg2.
 
 ---
 
 ## 8. Known issues
 
-| # | Issue | Impact |
+### Resolved in this revision
+
+| # | Issue | Fix |
 |---|---|---|
-| 1 | **Tables are duplicated in `raw_text`.** `HTMLExtractor` uses `get_text()` (which includes table cells), and `_merge_tables_into_text` then appends the same tables as Markdown | Duplicate content in chunks; tables are cut away from their context |
-| 2 | Stage 2 sets `tables=[]`, so no `chunk_type="table"` chunks are produced; tables are split by the text splitter | Large tables (rate schedules) can be split across chunks |
-| 3 | **pgvector is not dual-written.** It is only populated when Pinecone fails, so the pgvector fallback at query time is usually empty | "Backup" store is not a real backup |
-| 4 | No vector index on `processed_chunks.embedding`. pgvector's HNSW/IVFFlat support `vector` up to 2000 dims, but we store 3072 | pgvector search is a sequential scan |
-| 5 | The BM25 index is built once at API startup | Newly embedded chunks are invisible to keyword search until the API restarts |
-| 6 | The Pinecone filter supports only `source_name`, `property_types` and `citizenship_types`; `topic` and `effective_date` are not in vector metadata | Topic/date filters are impossible |
-| 7 | Hybrid search runs BM25 on each phrasing. The final cross-phrasing sort compares RRF scores, which carry no absolute meaning | `score` is not comparable across requests; no relevance threshold possible |
-| 8 | Housekeeping: `processors/__init__ copy.py` (duplicate), committed `celerybeat-schedule*` runtime files, stale [CLAUDE.md](CLAUDE.md) (still says httpx and "Week 2 not started") | Confusion |
-| 9 | CI triggers only on `main`/`master`, not `dev` | PRs into `dev` are unchecked |
-| 10 | No answer-level citation check: chunks carry `source_url`, but nothing verifies that the agent's answer is supported by them | Hallucination risk downstream |
+| 1 | Tables duplicated in `raw_text` | The `features` extractors inline tables; the append step was removed from `S3Pipeline` |
+| 2 | No `chunk_type="table"` chunks; tables split mid-row | The chunker keeps tables atomic and splits large ones by row groups with a repeated header; the validator exempts tables from the 50-token minimum |
+| 3 | pgvector only written when Pinecone failed | Dual-write in `EmbeddingPipeline.embed_chunks`; [backfill_pgvector.py](backfill_pgvector.py) restores older vectors from S3 |
+| 4 | No vector index on 3072-dim embeddings | Migration 008: HNSW on `embedding::halfvec(3072)`; queries use the same expression |
+| 5 | BM25 index stale until API restart | TTL auto-rebuild (`BM25_REFRESH_SECONDS`) with an atomic swap, plus `POST /admin/reindex-bm25`; deleted documents are excluded |
+| 6 | Pinecone filter missing `topic` / `effective_date` | Metadata now has `topics`, `chunk_type`, `effective_date_ts`; `/retrieve` accepts `filters.topic` |
+| 7 | Hybrid `score` meaningless across requests | RRF is summed across phrasings and normalised to (0, 1] |
+| 8 | Housekeeping | Removed `processors/__init__ copy.py` and the committed `celerybeat-schedule*` (now git-ignored); CLAUDE.md rewritten |
+| 9 | CI ignored `dev` | CI now also triggers on `dev` |
+| 10 | No check that facts are backed by retrieved text | [eval/retrieval_eval.py](eval/retrieval_eval.py) `Must_Contain` column: exact figures must appear in the retrieved chunks |
+
+### Still open / caveats
+
+- Pinecone vectors created before this change lack `topics` / `effective_date_ts`; re-embed (`--purge-vectors`, then `--embed-only`) to use those filters.
+- Existing documents keep their old (duplicated-table) `raw_text` until re-crawled. Run a full crawl to refresh; the hash now includes table text, so those pages will register as "changed" once.
+- The Beat schedule is read when Beat starts; restart `beat` after changing a schedule.
+- `ADMIN_API_KEY` is optional; set it before exposing the API outside a trusted network.
+- `eval/testset.csv` has no `Must_Contain` / `Topic` columns yet; add them for numeric-fact checks and per-topic reports.
+- None of these changes were built or test-run in this revision (project preference). Validate by running a crawl, then `eval/retrieval_eval.py`.
 
 ---
 
@@ -458,7 +467,7 @@ Goal: each layer is measured against a **ground truth**, with a target and a com
 | End-to-end (agent) | Faithfulness, answer relevancy, contextual precision/recall | ≥ 0.8 | DeepEval via `testing/evaluation/run_rag_eval.py` against the agent |
 | End-to-end | Numeric exactness | 100% *(proposed)* | Answers to the numeric facts set must contain the exact official figure |
 
-### 9.3 Retrieval-only evaluation (to add as `eval/retrieval_eval.py`)
+### 9.3 Retrieval-only evaluation ([eval/retrieval_eval.py](eval/retrieval_eval.py))
 
 This is the most direct check that the KB itself returns the right documents. It tests the KB without any LLM answer generation.
 
@@ -472,7 +481,7 @@ report per source, per topic, per search_mode (vector vs hybrid) → JSON + CSV
 fail CI if hit@5 or MRR fall below target or drop > 5 points vs the last baseline
 ```
 
-Run it three times: `vector`, `hybrid`, and `hybrid` with expansion turned off. That shows whether BM25 and query expansion actually help.
+`python eval/retrieval_eval.py --k 5 --mode hybrid --min-hit 0.9 --min-mrr 0.7 --baseline eval/baseline.json` writes `eval/last_run.json` and exits non-zero on failure. Run it three times: `vector`, `hybrid`, and `hybrid` with expansion turned off. That shows whether BM25 and query expansion actually help.
 
 ### 9.4 Where each check runs
 
@@ -487,26 +496,21 @@ Run it three times: `vector`, `hybrid`, and `hybrid` with expansion turned off. 
 
 ## 10. Next steps and the libraries each one needs
 
-Ordered by priority.
+Done in this revision: job API, DB-driven schedule, subprocess crawls, Grafana, table-aware chunking, dual-write + HNSW, BM25 refresh, topic filters, evaluation harness.
 
 | # | Feature | What to do | Libraries / tools |
 |---|---|---|---|
-| 1 | **Pipeline control and job history API** (task 3.7) | Port `/crawl`, `/process`, `/embed`, `/jobs` and Celery tasks that write `task_executions` from `property-advisory-ai-advisory/KB-Pipeline`. Add `/stats`: per-source docs/chunks/vectors, last crawl, token cost | FastAPI, Celery, SQLAlchemy (already present) |
-| 2 | **Reliable repeated crawls in Celery** | Fix Twisted `ReactorNotRestartable` by running each crawl in a subprocess (`billiard`/`multiprocessing`) or by porting the monorepo's `CrawlerRunner` approach | Scrapy `CrawlerRunner`, `billiard` (ships with Celery) |
-| 3 | **Retrieval evaluation harness** (§9.3) + CI gate | `eval/retrieval_eval.py`, extended golden set, baseline JSON committed; DeepEval for end-to-end | `httpx`, `pandas`, `deepeval`, `ragas` (alternative), `pytest` |
-| 4 | **Monitoring dashboard** | Add `grafana` + `prometheus` services to compose. Export metrics (pages crawled, chunks, embed tokens/cost, retrieval latency, hit rate). Rebuild the Grafana JSON against real tables (`crawl_jobs`, `task_executions`) | `prometheus-client`, `prometheus-fastapi-instrumentator`, Grafana, optionally `flower` for Celery |
-| 5 | **Better extraction** (merge `features` branch) | Resolve conflicts with `dev`'s `pdf_extractor.py`; remove `_merge_tables_into_text` for paths that already inline tables (known issue 1); add gold-set extractor tests | BeautifulSoup, pdfplumber, PyMuPDF (present); `jiwer` for CER/WER |
-| 6 | **Single source of truth for source config** | Add a new migration (e.g. 008) that upserts `crawl_config` including `schedule`. Read the Beat schedule from the DB, then retire `sources.yml`/`sync_sources.py`. Consider `celery-redbeat` so schedule changes apply without restarting Beat | Alembic, `celery-redbeat` |
-| 7 | **Table-aware chunking** | Keep tables as atomic `chunk_type="table"` chunks with caption + heading context; split very large tables by row groups with repeated headers | langchain-text-splitters (`MarkdownHeaderTextSplitter`), tiktoken |
-| 8 | **Real pgvector backup** | Dual-write embeddings; store as `halfvec(3072)` with an HNSW index (`m=16, ef_construction=128`), or reduce to 1536 dims via the `dimensions` parameter of `text-embedding-3-large`; benchmark against Pinecone | pgvector ≥ 0.7 (`halfvec`), Alembic |
-| 9 | **Reranking** | Rerank the top 20–50 RRF candidates with a cross-encoder; gives a meaningful relevance score and threshold | `sentence-transformers` (`BAAI/bge-reranker-v2-m3`) or the Cohere / Voyage rerank APIs |
-| 10 | **Fresh BM25 / production keyword search** | Rebuild BM25 after each embed run (Redis pub/sub or `/admin/reindex`), or move to Postgres full-text search (`tsvector` + GIN), or Pinecone sparse-dense vectors | Postgres FTS, `pinecone-text` (BM25 encoder) |
-| 11 | **OCR for scanned PDFs** | Process `raw_documents WHERE needs_ocr` through OCR, then re-hash and re-process | `pytesseract` + Tesseract binary, or `ocrmypdf`; `pdf2image` |
-| 12 | **Richer vector metadata** | Add `topic`, `effective_date` (as epoch int for range filters) and `chunk_type` to Pinecone metadata; expose them as `/retrieve` filters | pinecone (present) |
-| 13 | **Admin CLI** (task 3.12) | `kb crawl/process/embed/stats/search/reindex [source]` | `typer` or `click`, `rich` for tables |
-| 14 | **Security and hardening** | API key auth on `/retrieve` and admin endpoints, rate limiting, secrets out of `docker-compose.yml`, non-root container | FastAPI `Security`, `slowapi`, Docker secrets |
-| 15 | **Multilingual queries** (task 3.10) | Detect language; translate the query (via the expansion LLM) before retrieval | `langdetect` / `fasttext-langdetect` |
-| 16 | **Housekeeping** | Delete `processors/__init__ copy.py`; untrack `celerybeat-schedule*` and add to `.gitignore`; run CI on `dev`; update [CLAUDE.md](CLAUDE.md) to the current architecture; tag `v1.0.0` | git, GitHub Actions |
+| 1 | **Grow the evaluation set** | Extend `eval/testset.csv` to 50+ human-verified rows with `Topic` and `Must_Contain`; commit `eval/baseline.json`; add a nightly job | `httpx` (present); `deepeval` or `ragas` for answer-level metrics at the agent layer |
+| 2 | **Verify extraction against gold data** | Hand-verified HTML/PDF gold set; measure CER/WER, table cell accuracy, content precision | `jiwer`; offline snapshots as in `ingest_offline_docs.py` |
+| 3 | **Prometheus metrics + alerts** | Export crawl/embed/retrieval metrics; alert on stale crawls, embedding backlog, hit-rate drop | `prometheus-client`, `prometheus-fastapi-instrumentator`; Grafana alerting; `flower` for Celery |
+| 4 | **Reranking** | Rerank the top 20–50 RRF candidates with a cross-encoder for better precision and a meaningful score | `sentence-transformers` (`BAAI/bge-reranker-v2-m3`) or Cohere / Voyage rerank APIs |
+| 5 | **OCR for scanned PDFs** | Process `raw_documents WHERE needs_ocr`, then re-hash and re-process | `ocrmypdf` or `pytesseract` + Tesseract; `pdf2image` |
+| 6 | **Postgres full-text / sparse vectors** | Replace in-memory BM25 for large corpora | Postgres `tsvector` + GIN, or `pinecone-text` BM25 encoder |
+| 7 | **Admin CLI** (task 3.12) | `kb crawl/process/embed/stats/search/reindex [source]` | `typer`, `rich` |
+| 8 | **Security hardening** | Rate limiting on `/retrieve`, secrets out of `docker-compose.yml`, non-root containers, mandatory `ADMIN_API_KEY` outside dev | `slowapi`, Docker secrets |
+| 9 | **Multilingual queries** (task 3.10) | Detect language; translate via the expansion LLM before retrieval | `langdetect` / `fasttext-langdetect` |
+| 10 | **Schedule hot-reload** | Pick up schedule changes without restarting Beat | `celery-redbeat` |
+| 11 | **Release** | Tag `v1.0.0` after a full crawl and an evaluation run that meets the targets | git |
 
 ---
 

@@ -1,4 +1,7 @@
-"""pgvector fallback vector store — writes embeddings to processed_chunks.embedding."""
+"""pgvector vector store — dual-written with Pinecone; serves as the query fallback.
+
+Queries cast to halfvec(3072) so they use the HNSW expression index from migration 008
+(the plain ``vector`` type cannot be HNSW-indexed above 2000 dimensions)."""
 
 import json
 
@@ -33,10 +36,11 @@ class PgVectorStore:
         source_filter: list[str] | None = None,
         property_type_filter: list[str] | None = None,
         citizenship_filter: list[str] | None = None,
+        topic_filter: list[str] | None = None,
     ) -> list[dict]:
         """Cosine similarity search on processed_chunks.embedding. Returns list of matches."""
         return self._query_with_retry(
-            vector, top_k, source_filter, property_type_filter, citizenship_filter
+            vector, top_k, source_filter, property_type_filter, citizenship_filter, topic_filter
         )
 
     def upsert(
@@ -76,11 +80,12 @@ class PgVectorStore:
         source_filter: list[str] | None = None,
         property_type_filter: list[str] | None = None,
         citizenship_filter: list[str] | None = None,
+        topic_filter: list[str] | None = None,
     ) -> list[dict]:
         """Execute cosine similarity search with retry logic."""
         with self._engine.connect() as conn:
             fetch_limit = top_k
-            if property_type_filter or citizenship_filter:
+            if property_type_filter or citizenship_filter or topic_filter:
                 fetch_limit = min(max(top_k * 25, 50), 500)
 
             params = {"vec": str(vector), "top_k": fetch_limit}
@@ -99,12 +104,12 @@ class PgVectorStore:
                     pc.metadata_json,
                     rd.url AS source_url,
                     s.code AS source_name,
-                    1 - (pc.embedding <=> CAST(:vec AS vector)) AS score
+                    1 - (pc.embedding::halfvec(3072) <=> CAST(:vec AS halfvec(3072))) AS score
                 FROM processed_chunks pc
                 JOIN raw_documents rd ON pc.document_id = rd.id
                 JOIN sources s ON rd.source_id = s.id
                 WHERE {where_sql}
-                ORDER BY pc.embedding <=> CAST(:vec AS vector)
+                ORDER BY pc.embedding::halfvec(3072) <=> CAST(:vec AS halfvec(3072))
                 LIMIT :top_k
             """
 
@@ -116,7 +121,9 @@ class PgVectorStore:
                 if isinstance(metadata, str):
                     metadata = json.loads(metadata)
 
-                if not chunk_matches_tag_filters(metadata, property_type_filter, citizenship_filter):
+                if not chunk_matches_tag_filters(
+                    metadata, property_type_filter, citizenship_filter, topic_filter
+                ):
                     continue
 
                 matches.append(

@@ -17,6 +17,8 @@ from api.schemas import ChunkResult, EntitiesExtracted, FilterParams, RetrieveRe
 
 logger = get_logger("retrieval")
 
+_RRF_K = 60
+
 
 class RetrievalService:
     """Orchestrates query embedding, vector store dispatch, and result assembly.
@@ -60,6 +62,8 @@ class RetrievalService:
         results_per_phrasing: list[int] = []
         search_total_ms = 0.0
 
+        is_hybrid = request.search_mode == "hybrid" and self._bm25 is not None
+
         embed_start = time.perf_counter()
         for phrase in phrasings:
             vector = self._embedding_service.embed_query(phrase)
@@ -72,10 +76,21 @@ class RetrievalService:
             results_per_phrasing.append(len(results))
             for r in results:
                 key = f"{r.source_url}:{r.chunk_index}"
-                if key not in all_results or r.score > all_results[key].score:
+                if key not in all_results:
+                    all_results[key] = r
+                elif is_hybrid:
+                    # RRF across phrasings: a chunk found by several phrasings gains rank.
+                    all_results[key].score += r.score
+                elif r.score > all_results[key].score:
                     all_results[key] = r
 
         embedding_latency_ms = round((time.perf_counter() - embed_start) * 1000 - search_total_ms, 2)
+        if is_hybrid:
+            # Each phrasing contributes at most 1/(RRF_K+1); scale so score is in (0, 1]
+            # and comparable across requests (still a rank-based score, not a probability).
+            max_score = len(phrasings) / (_RRF_K + 1)
+            for r in all_results.values():
+                r.score = round(min(r.score / max_score, 1.0), 4)
         final_results = sorted(all_results.values(), key=lambda r: r.score, reverse=True)[: request.top_k]
         latency_ms = round((time.perf_counter() - start) * 1000, 2)
 
@@ -109,6 +124,14 @@ class RetrievalService:
             trace=trace,
         )
 
+    def reindex_bm25(self) -> int | None:
+        """Force a BM25 rebuild (e.g. right after an embed run). Returns corpus size."""
+        return self._bm25.build() if self._bm25 is not None else None
+
+    @property
+    def bm25_corpus_size(self) -> int | None:
+        return self._bm25.corpus_size if self._bm25 is not None else None
+
     def _query_stores(
         self,
         vector: list[float],
@@ -139,6 +162,7 @@ class RetrievalService:
             source_filter=request.filters.source,
             property_type_filter=request.filters.property_type,
             citizenship_filter=request.filters.citizenship_type,
+            topic_filter=request.filters.topic,
         )
         return self._map_pgvector(rows), "pgvector"
 
@@ -169,6 +193,7 @@ class RetrievalService:
                 source_filter=request.filters.source,
                 property_type_filter=request.filters.property_type,
                 citizenship_filter=request.filters.citizenship_type,
+            topic_filter=request.filters.topic,
             )
             vector_ids = [row["embedding_id"] for row in rows if row.get("embedding_id")]
             store_used = "pgvector"
@@ -179,10 +204,11 @@ class RetrievalService:
             source_filter=request.filters.source,
             property_type_filter=request.filters.property_type,
             citizenship_filter=request.filters.citizenship_type,
+            topic_filter=request.filters.topic,
         )
         bm25_ids = [eid for eid, _ in bm25_results]
 
-        fused_ids = self._fuse_rrf(vector_ids, bm25_ids, k=60, top_k=request.top_k)
+        fused_ids = self._fuse_rrf(vector_ids, bm25_ids, k=_RRF_K, top_k=request.top_k)
         results = self._map_hybrid(fused_ids)
 
         return results, f"hybrid_{store_used}"
@@ -198,6 +224,8 @@ class RetrievalService:
             metadata_conditions.append({"property_types": {"$in": filters.property_type}})
         if filters.citizenship_type:
             metadata_conditions.append({"citizenship_types": {"$in": filters.citizenship_type}})
+        if filters.topic:
+            metadata_conditions.append({"topics": {"$in": filters.topic}})
 
         if filters.source and len(filters.source) == 1:
             namespace = filters.source[0].lower()
@@ -246,7 +274,7 @@ class RetrievalService:
             meta = db.get("metadata_json", {})
             tags = meta.get("tags", {})
 
-            rrf_score = 1 / (60 + rank)
+            rrf_score = 1 / (_RRF_K + rank)
 
             results.append(
                 ChunkResult(

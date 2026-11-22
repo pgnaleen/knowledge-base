@@ -57,3 +57,9 @@ alembic/__pycache__/
 # OS
 .DS_Store
 Thumbs.db
+
+# Celery Beat runtime state
+celerybeat-schedule*
+
+# Local scratch
+tmp_scratch/

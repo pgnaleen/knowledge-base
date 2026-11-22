@@ -135,7 +135,8 @@ class ChunkValidator:
 
         token_count = len(_ENCODING.encode(chunk.chunk_text))
 
-        if token_count < self.MIN_TOKENS:
+        # Tables are exempt from the minimum: a small rate table is still a complete fact.
+        if token_count < self.MIN_TOKENS and chunk.chunk_type != "table":
             issues.append(ChunkValidationIssue(
                 chunk_index=chunk.chunk_index,
                 field="chunk_text",
