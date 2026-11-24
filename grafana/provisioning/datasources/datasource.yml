@@ -1,0 +1,16 @@
+apiVersion: 1
+
+datasources:
+  - name: PostgreSQL
+    uid: kb-postgres
+    type: postgres
+    access: proxy
+    url: postgres:5432
+    database: kb_pipeline_db
+    user: kb_user
+    secureJsonData:
+      password: kb_pass
+    jsonData:
+      sslmode: disable
+      postgresVersion: 1600
+    isDefault: true

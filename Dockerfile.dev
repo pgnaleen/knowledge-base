@@ -1,20 +1,16 @@
 FROM python:3.11-slim
 
-WORKDIR /workspace
-
-# System deps for psycopg2, lxml, Playwright
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    libpq-dev \
-    libxml2-dev \
-    libxslt1-dev \
+RUN apt-get update && apt-get install -y \
     curl \
+    gcc \
+    libpq-dev \
     && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
 
 COPY pyproject.toml ./
 RUN pip install --no-cache-dir -e ".[dev]"
 
-# Install Playwright browsers
-RUN playwright install chromium --with-deps
+RUN playwright install --with-deps chromium
 
-CMD ["bash"]
+COPY . .

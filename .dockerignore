@@ -1,0 +1,31 @@
+# Don't include local venv in Docker build context
+.venv/
+venv/
+env/
+
+# Git / IDE
+.git/
+.github/
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Python cache
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+
+# Environment
+.env
+.env.local
+
+# Testing
+.pytest_cache/
+htmlcov/
+
+# OS
+.DS_Store
+Thumbs.db

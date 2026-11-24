@@ -19,15 +19,14 @@ class ExtractedMetadata:
     """Document-level metadata enriched from an ExtractedDocument.
 
     Serialised to metadata_json (JSONB) per chunk in processed_chunks.
+    Domain-agnostic: tags are a nested dict of tag_category -> [tag values].
     """
 
     title: str
-    source_agency: str  # "HDB" | "URA" | "IRAS" | "MAS" | "CPF" | ""
+    source_agency: str  # Source name from DB, e.g. "Housing & Development Board"
     section: str  # First h1/h2 heading, or title if no headings
     effective_date: str  # ISO "YYYY-MM-DD" string, or "" if not found
-    property_types: list[str]  # e.g. ["HDB", "EC", "private"] or ["all"]
-    citizenship_types: list[str]  # e.g. ["SC", "PR", "foreigner"] or ["all"]
-    topic_tags: list[str]  # e.g. ["stamp_duty", "ABSD", "LTV"]
+    tags: dict[str, list[str]] = field(default_factory=dict)  # e.g. {"property_type": ["HDB"], "topic": ["stamp_duty"]}
     metadata_warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -50,6 +49,7 @@ class DocumentChunk:
     source_name: str
     content_type: str  # "html" | "pdf"
     word_count: int
+    token_count: int = 0
 
 
 @dataclass

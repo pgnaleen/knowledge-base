@@ -1,4 +1,4 @@
-"""PDF extraction module — pdfplumber primary, PyMuPDF fallback."""
+"""PDF extraction module - pdfplumber primary, PyMuPDF fallback."""
 
 import io
 import re
@@ -12,6 +12,10 @@ _table_extractor = TableExtractor()
 logger = get_logger("pdf_extractor")
 
 _SCANNED_WORD_THRESHOLD = 20
+_SCANNED_PAGE_RATIO_THRESHOLD = 0.8
+_LARGE_IMAGE_COVERAGE_THRESHOLD = 0.85
+_LOW_TEXT_PAGE_RATIO_THRESHOLD = 0.2
+_IMAGE_PAGE_RATIO_THRESHOLD = 0.6
 
 
 class PDFExtractionError(ValueError):
@@ -34,19 +38,26 @@ class PDFExtractor:
         if not pdf_bytes:
             raise PDFExtractionError("pdf_bytes is empty")
 
+        logger.info("pdf.started", source_url=source_url, source_name=source_name)
+
         warnings: list[str] = []
         text = ""
         title = "Untitled"
         page_count = 0
         used_fallback = False
         tables: list[ExtractedTable] = []
+        pdfplumber_error = ""
+        pymupdf_error = ""
+        interleaved_text: str | None = None
 
         try:
-            text, title, page_count = self._extract_pdfplumber(pdf_bytes)
-            tables = _table_extractor.extract_from_pdf(pdf_bytes)
+            interleaved_text, title, page_count, tables = self._extract_pdfplumber_interleaved(
+                pdf_bytes
+            )
         except PDFExtractionError:
             raise
         except Exception as exc:
+            pdfplumber_error = f"{type(exc).__name__}: {exc}"
             logger.warning(
                 "pdf_extractor.pdfplumber_failed",
                 error=str(exc),
@@ -56,15 +67,26 @@ class PDFExtractor:
                 f"pdfplumber failed ({type(exc).__name__}), using PyMuPDF fallback"
             )
             used_fallback = True
+            logger.warning(
+                "pdf.pymupdf_fallback",
+                source_url=source_url,
+                source_name=source_name,
+                reason=type(exc).__name__,
+            )
 
-        if used_fallback or not text.strip():
-            if not used_fallback:
+        if interleaved_text is not None and interleaved_text.strip():
+            text = interleaved_text
+        else:
+            if interleaved_text is not None:
                 warnings.append("pdfplumber returned no text, using PyMuPDF fallback")
+            if not used_fallback:
                 used_fallback = True
             try:
                 fitz_text, fitz_title, fitz_page_count = self._extract_pymupdf(pdf_bytes)
                 if fitz_text.strip():
                     text = fitz_text
+                elif interleaved_text is not None:
+                    text = interleaved_text
                 if fitz_title and fitz_title != "Untitled":
                     title = fitz_title
                 if fitz_page_count:
@@ -72,6 +94,7 @@ class PDFExtractor:
             except PDFExtractionError:
                 raise
             except Exception as exc:
+                pymupdf_error = f"{type(exc).__name__}: {exc}"
                 logger.error(
                     "pdf_extractor.pymupdf_failed",
                     error=str(exc),
@@ -79,29 +102,75 @@ class PDFExtractor:
                 )
                 warnings.append(f"PyMuPDF also failed ({type(exc).__name__})")
 
+            # Re-detect tables against the fallback text stream (avoids mixing
+            # partial interleaved state with PyMuPDF output).
+            tables = _table_extractor.extract_from_pdf(pdf_bytes)
+            if text and tables:
+                text = self._remove_table_lines(text, tables)
+            text = self._append_markdown_tables_end(text, tables)
+
         normalised = self._normalise_whitespace(text)
         word_count = len(normalised.split()) if normalised.strip() else 0
 
-        if word_count < _SCANNED_WORD_THRESHOLD:
-            warnings.append(
-                f"Scanned PDF detected (only {word_count} words extracted) "
-                "— flagged for OCR queue"
+        # Check for extraction failures
+        if not normalised and (pdfplumber_error or pymupdf_error):
+            extraction_error = (
+                "ERROR: PDF text extraction failed. "
+                f"pdfplumber_error={pdfplumber_error or 'none'}; "
+                f"pymupdf_error={pymupdf_error or 'none'}"
             )
-            logger.warning(
-                "pdf_extractor.scanned_pdf",
-                word_count=word_count,
+            warnings.append(extraction_error)
+            logger.error(
+                "pdf.text_extraction_failed",
                 source_url=source_url,
                 source_name=source_name,
+                pdfplumber_error=pdfplumber_error or None,
+                pymupdf_error=pymupdf_error or None,
             )
 
-        logger.debug(
-            "pdf_extractor.extracted",
+        is_scanned, scan_signals = self._detect_scanned_pdf(pdf_bytes)
+
+        if is_scanned:
+            warnings.append(
+                "Scanned PDF detected (image-only pages dominate, "
+                f"text_pages={scan_signals['text_pages']}/{scan_signals['page_count']}, "
+                f"image_pages={scan_signals['image_pages']}/{scan_signals['page_count']}) "
+                "- flagged for OCR queue"
+            )
+            logger.warning(
+                "pdf.ocr_detected",
+                word_count=word_count,
+                pages=page_count,
+                text_pages=scan_signals["text_pages"],
+                image_pages=scan_signals["image_pages"],
+                scanned_like_pages=scan_signals["scanned_like_pages"],
+                source_url=source_url,
+                source_name=source_name,
+                scan_details=scan_signals,
+            )
+        elif word_count < _SCANNED_WORD_THRESHOLD:
+            low_text_error = (
+                f"ERROR: Very low extracted text ({word_count} words) but OCR heuristic did not classify as scanned PDF."
+            )
+            warnings.append(low_text_error)
+            logger.error(
+                "pdf.low_text_not_ocr",
+                word_count=word_count,
+                pages=page_count,
+                source_url=source_url,
+                source_name=source_name,
+                scan_details=scan_signals,
+            )
+
+        logger.info(
+            "pdf.extracted",
             source_url=source_url,
             source_name=source_name,
             page_count=page_count,
             word_count=word_count,
             table_count=len(tables),
             used_fallback=used_fallback,
+            is_scanned=is_scanned,
         )
 
         return ExtractedDocument(
@@ -116,8 +185,14 @@ class PDFExtractor:
             extraction_warnings=warnings,
         )
 
-    def _extract_pdfplumber(self, pdf_bytes: bytes) -> tuple[str, str, int]:
+    def _extract_pdfplumber_interleaved(
+        self, pdf_bytes: bytes
+    ) -> tuple[str, str, int, list[ExtractedTable]]:
+        """Extract per-page text with Markdown tables at their vertical positions."""
         import pdfplumber
+
+        all_tables: list[ExtractedTable] = []
+        page_bodies: list[str] = []
 
         try:
             with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
@@ -125,17 +200,149 @@ class PDFExtractor:
                 title = self._clean_metadata_string(meta.get("Title", "")) or "Untitled"
                 page_count = len(pdf.pages)
 
-                pages: list[str] = []
-                for page in pdf.pages:
-                    page_text = page.extract_text() or ""
-                    if page_text.strip():
-                        pages.append(page_text.strip())
-
-                return "\n\n".join(pages), title, page_count
+                for page_index, page in enumerate(pdf.pages):
+                    page_number = page_index + 1
+                    body, page_tables = self._interleave_page_tables(page, page_number)
+                    all_tables.extend(page_tables)
+                    if body.strip():
+                        page_bodies.append(body.strip())
         except Exception as exc:
             if "PDF" in type(exc).__name__ or "invalid" in str(exc).lower():
                 raise PDFExtractionError(f"Not a valid PDF: {exc}") from exc
             raise
+
+        text = "\n\n".join(page_bodies)
+        return text, title, page_count, all_tables
+
+    def _interleave_page_tables(self, page: Any, page_number: int) -> tuple[str, list[ExtractedTable]]:
+        """Build one page string: non-table words in reading order, tables by bbox."""
+        words: list[dict[str, Any]] = page.extract_words() or []
+        table_objs = list(page.find_tables() or [])
+        bboxes = [t.bbox for t in table_objs]
+
+        def word_in_any_table(w: dict[str, Any]) -> bool:
+            cx = (float(w["x0"]) + float(w["x1"])) / 2
+            cy = (float(w["top"]) + float(w["bottom"])) / 2
+            for bbox in bboxes:
+                bx0, btop, bx1, bbottom = (float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3]))
+                if bx0 <= cx <= bx1 and btop <= cy <= bbottom:
+                    return True
+            return False
+
+        outside_words = [w for w in words if not word_in_any_table(w)]
+        lines = self._words_clustered_to_lines(outside_words)
+
+        events: list[tuple[float, float, str]] = []
+        for top, x0, line in lines:
+            stripped = line.strip()
+            if stripped:
+                events.append((top, x0, stripped))
+
+        page_tables: list[ExtractedTable] = []
+        for tbl in table_objs:
+            raw = tbl.extract()
+            ext = _table_extractor._parse_pdf_table(raw, page_number)
+            if ext is None:
+                continue
+            md = TableExtractor.to_markdown(ext)
+            if not md:
+                continue
+            row_count = len(raw) if raw else 0
+            col_count = max((len(r) for r in raw), default=0) if raw else 0
+            logger.info(
+                "Table detected",
+                pipeline="pdf",
+                page_number=page_number,
+                row_count=row_count,
+                col_count=col_count,
+            )
+            page_tables.append(ext)
+            bbox = tbl.bbox
+            events.append((float(bbox[1]), float(bbox[0]), md))
+
+        events.sort(key=lambda e: (e[0], e[1]))
+        body = "\n\n".join(e[2] for e in events)
+        return self._normalise_whitespace(body), page_tables
+
+    @staticmethod
+    def _words_clustered_to_lines(
+        words: list[dict[str, Any]],
+    ) -> list[tuple[float, float, str]]:
+        """Cluster pdfplumber words into lines (top, left, text) for reading order."""
+        if not words:
+            return []
+        sorted_w = sorted(words, key=lambda w: (float(w["top"]), float(w["x0"])))
+        tol = 3.0
+        line_groups: list[list[dict[str, Any]]] = []
+        current: list[dict[str, Any]] = []
+        current_top: float | None = None
+        for w in sorted_w:
+            top = float(w["top"])
+            if current_top is None or abs(top - current_top) <= tol:
+                current.append(w)
+                if current_top is None:
+                    current_top = top
+            else:
+                line_groups.append(current)
+                current = [w]
+                current_top = top
+        if current:
+            line_groups.append(current)
+
+        out: list[tuple[float, float, str]] = []
+        for line_words in line_groups:
+            line_words.sort(key=lambda w: float(w["x0"]))
+            text = " ".join(str(w.get("text") or "") for w in line_words).strip()
+            if not text:
+                continue
+            top = min(float(w["top"]) for w in line_words)
+            x0 = min(float(w["x0"]) for w in line_words)
+            out.append((top, x0, text))
+        return out
+
+    def _remove_table_lines(self, text: str, tables: list[ExtractedTable]) -> str:
+        """Remove lines that match extracted table rows/headers.
+
+        pdfplumber/PyMuPDF text extraction often includes table cell text as
+        linearised lines. Since we append Markdown tables separately, we drop
+        those lines here to prevent duplicates while keeping surrounding prose.
+        """
+        signatures: set[str] = set()
+        for table in tables:
+            for row in ([table.headers] if table.headers else []) + (table.rows or []):
+                cleaned = [str(c).replace("\n", " ").strip() for c in (row or []) if str(c).strip()]
+                # Only treat multi-cell rows as table signatures to avoid removing normal sentences.
+                if len(cleaned) >= 2:
+                    sig = self._normalise_whitespace(" ".join(cleaned))
+                    if sig:
+                        signatures.add(sig)
+
+        if not signatures:
+            return text
+
+        kept: list[str] = []
+        for line in text.splitlines():
+            norm = self._normalise_whitespace(line)
+            if norm and norm in signatures:
+                continue
+            kept.append(line)
+
+        return "\n".join(kept)
+
+    @staticmethod
+    def _append_markdown_tables_end(text: str, tables: list[ExtractedTable]) -> str:
+        """Append Markdown tables after body text (PyMuPDF fallback path only)."""
+        parts: list[str] = []
+        base = text.strip()
+        if base:
+            parts.append(base)
+        for tbl in tables:
+            md = TableExtractor.to_markdown(tbl)
+            if md.strip():
+                parts.append(md.strip())
+        if not parts:
+            return ""
+        return "\n\n".join(parts)
 
     def _extract_pymupdf(self, pdf_bytes: bytes) -> tuple[str, str, int]:
         import fitz  # PyMuPDF
@@ -151,12 +358,92 @@ class PDFExtractor:
             page_count = doc.page_count
 
             pages: list[str] = []
-            for page in doc:
-                page_text = page.get_text("text")
+            for i, page in enumerate(doc):
+                page_number = i + 1
+                # sort=True preserves reading order for multi-column layouts
+                page_text = page.get_text("text", sort=True)
                 if page_text.strip():
                     pages.append(page_text.strip())
 
             return "\n\n".join(pages), title, page_count
+        finally:
+            doc.close()
+
+    def _detect_scanned_pdf(self, pdf_bytes: bytes) -> tuple[bool, dict[str, int]]:
+        """Detect scanned PDFs by checking page-level text and image layers.
+
+        Heuristic:
+        - A page is scanned-like when it has no text layer and has image content.
+        - A document is scanned when image-only pages dominate (>= 80%), and
+          there is at least one image page.
+        """
+        import fitz  # PyMuPDF
+
+        empty_signals = {
+            "page_count": 0,
+            "text_pages": 0,
+            "image_pages": 0,
+            "scanned_like_pages": 0,
+        }
+
+        try:
+            doc: Any = fitz.open(stream=pdf_bytes, filetype="pdf")
+        except Exception:
+            return False, empty_signals
+
+        try:
+            page_count = doc.page_count
+            text_pages = 0
+            image_pages = 0
+            scanned_like_pages = 0
+
+            for page in doc:
+                blocks = page.get_text("dict").get("blocks", [])
+                page_has_text = False
+                image_area = 0.0
+                page_area = float(page.rect.width * page.rect.height) or 1.0
+
+                for block in blocks:
+                    block_type = block.get("type")
+                    if block_type == 0:
+                        for line in block.get("lines", []):
+                            for span in line.get("spans", []):
+                                if (span.get("text") or "").strip():
+                                    page_has_text = True
+                                    break
+                            if page_has_text:
+                                break
+                        if page_has_text:
+                            break
+                    elif block_type == 1:
+                        bbox = block.get("bbox") or [0, 0, 0, 0]
+                        width = max(0.0, float(bbox[2]) - float(bbox[0]))
+                        height = max(0.0, float(bbox[3]) - float(bbox[1]))
+                        image_area += width * height
+
+                page_has_image = image_area > 0 or len(page.get_images(full=True)) > 0
+                page_has_large_image = (image_area / page_area) >= _LARGE_IMAGE_COVERAGE_THRESHOLD
+
+                if page_has_text:
+                    text_pages += 1
+                if page_has_image:
+                    image_pages += 1
+                if (not page_has_text) and (page_has_image or page_has_large_image):
+                    scanned_like_pages += 1
+
+            signals = {
+                "page_count": page_count,
+                "text_pages": text_pages,
+                "image_pages": image_pages,
+                "scanned_like_pages": scanned_like_pages,
+            }
+
+            if page_count == 0 or image_pages == 0:
+                return False, signals
+
+            scanned_ratio = scanned_like_pages / page_count
+            is_scanned = scanned_ratio >= _SCANNED_PAGE_RATIO_THRESHOLD
+            return is_scanned, signals
         finally:
             doc.close()
 
@@ -167,7 +454,7 @@ class PDFExtractor:
         if isinstance(value, bytes):
             value = value.decode("utf-8", errors="replace")
         text = str(value).strip()
-        text = text.lstrip("﻿").strip()
+        text = text.lstrip("\ufeff").strip()
         return text if text else ""
 
     @staticmethod

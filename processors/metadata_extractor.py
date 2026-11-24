@@ -8,14 +8,6 @@ from processors.models import ExtractedDocument, ExtractedMetadata
 
 logger = get_logger("metadata_extractor")
 
-_AGENCY_MAP: dict[str, str] = {
-    "hdb": "HDB",
-    "ura": "URA",
-    "iras": "IRAS",
-    "mas": "MAS",
-    "cpf": "CPF",
-}
-
 _DATE_PATTERNS: list[tuple[str, str]] = [
     (r"with\s+effect\s+from\s+(\d{1,2})\s+(\w+)\s+(\d{4})", "dmy"),
     (r"effective\s+(?:from\s+)?(\d{1,2})\s+(\w+)\s+(\d{4})", "dmy"),
@@ -29,56 +21,31 @@ _DATE_PATTERNS: list[tuple[str, str]] = [
     (r"(\d{4})-(\d{2})-(\d{2})", "iso"),
 ]
 
-_PROPERTY_KEYWORDS: dict[str, str] = {
-    r"\bhdb\b": "HDB",
-    r"\bexecutive\s+condominium\b|\bEC\b": "EC",
-    r"\bprivate\s+(?:residential|property)\b|\bnon-landed\b|\blanded\s+residential\b|\bcondominium\b|\bcondo\b": "private",
-    r"\bcommercial\s+property\b|\bindustrial\b": "commercial",
-}
-
-_CITIZENSHIP_KEYWORDS: dict[str, str] = {
-    r"\bsingapore\s+citizen\b|\bSC\b": "SC",
-    r"\bsingapore\s+(?:permanent\s+resident|PR)\b|\bpermanent\s+resident\b": "PR",
-    r"\bforeigner\b|\bnon[-\s]?resident\b|\bnon[-\s]?citizen\b": "foreigner",
-}
-
-_TOPIC_KEYWORDS: dict[str, str] = {
-    r"\bstamp\s+duty\b|\bABSD\b|\bBSD\b|\badditional\s+buyer.s\s+stamp\s+duty\b|\bbuyer.s\s+stamp\s+duty\b": "stamp_duty",
-    r"\bSSD\b|\bseller.s\s+stamp\s+duty\b": "SSD",
-    r"\bLTV\b|\bloan[-\s]to[-\s]value\b": "LTV",
-    r"\bTDSR\b|\btotal\s+debt\s+servicing\s+ratio\b": "TDSR",
-    r"\bMSR\b|\bmortgage\s+servicing\s+ratio\b": "MSR",
-    r"\bCPF\b|\bcentral\s+provident\s+fund\b": "CPF",
-    r"\bhdb\s+grant\b|\bhousing\s+grant\b|\bEHG\b|\bPHG\b|\bfamily\s+grant\b|\bproximity\s+housing\s+grant\b": "housing_grant",
-    r"\beligibilit": "eligibility",
-    r"\bfirst[-\s]time\b": "first_time_buyer",
-    r"\bcooling\s+measure": "cooling_measure",
-    r"\bproperty\s+tax\b": "property_tax",
-    r"\brent\b|\brental\b": "rental",
-}
-
 
 class MetadataExtractor:
-    """Enriches an ExtractedDocument with structured, query-filterable metadata."""
+    """Enriches an ExtractedDocument with structured, query-filterable metadata.
 
-    def extract(self, doc: ExtractedDocument) -> ExtractedMetadata:
+    Domain-agnostic: tag extraction uses config passed at extract time, not hardcoded keywords.
+    """
+
+    def extract(
+        self,
+        doc: ExtractedDocument,
+        source_agency: str = "",
+        tag_config: dict | None = None,
+    ) -> ExtractedMetadata:
         warnings: list[str] = []
-        source_agency = self._normalise_source_agency(doc.source_name, warnings)
         effective_date = self._extract_effective_date(doc.text, warnings)
         heading_texts = [h["text"] for h in doc.headings]
-        property_types = self._extract_property_types(doc.text, heading_texts)
-        citizenship_types = self._extract_citizenship_types(doc.text)
-        topic_tags = self._extract_topic_tags(doc.text, heading_texts)
+        tags = self._extract_tags(doc.text, heading_texts, tag_config or {})
         section = self._extract_section(doc.headings, doc.title)
 
-        logger.debug(
-            "metadata_extractor.extracted",
+        logger.info(
+            "metadata.extracted",
             source_agency=source_agency,
             section=section,
             effective_date=effective_date,
-            property_types=property_types,
-            citizenship_types=citizenship_types,
-            topic_tag_count=len(topic_tags),
+            tag_count=len(tags),
             warning_count=len(warnings),
         )
 
@@ -87,21 +54,9 @@ class MetadataExtractor:
             source_agency=source_agency,
             section=section,
             effective_date=effective_date,
-            property_types=property_types,
-            citizenship_types=citizenship_types,
-            topic_tags=topic_tags,
+            tags=tags,
             metadata_warnings=warnings,
         )
-
-    @staticmethod
-    def _normalise_source_agency(source_name: str, warnings: list[str]) -> str:
-        agency = _AGENCY_MAP.get(source_name.lower(), "")
-        if not agency:
-            warnings.append(
-                f"Unknown source_name '{source_name}' — source_agency left empty"
-            )
-            logger.warning("metadata_extractor.unknown_source", source_name=source_name)
-        return agency
 
     @staticmethod
     def _extract_effective_date(text: str, warnings: list[str]) -> str:
@@ -123,30 +78,35 @@ class MetadataExtractor:
         return ""
 
     @staticmethod
-    def _extract_property_types(text: str, heading_texts: list[str]) -> list[str]:
-        combined = text + " " + " ".join(heading_texts)
-        found: set[str] = set()
-        for pattern, label in _PROPERTY_KEYWORDS.items():
-            if re.search(pattern, combined, re.IGNORECASE):
-                found.add(label)
-        return sorted(found) if found else ["all"]
+    def _extract_tags(text: str, heading_texts: list[str], tag_config: dict) -> dict[str, list[str]]:
+        """Extract tags from text using domain-specific config.
 
-    @staticmethod
-    def _extract_citizenship_types(text: str) -> list[str]:
-        found: set[str] = set()
-        for pattern, label in _CITIZENSHIP_KEYWORDS.items():
-            if re.search(pattern, text, re.IGNORECASE):
-                found.add(label)
-        return sorted(found) if found else ["all"]
+        tag_config format:
+        {
+            "property_type": {"HDB": ["hdb"], "private": ["condo", ...]},
+            "citizenship": {"SC": ["singapore citizen"], ...},
+            "topic": {"stamp_duty": ["stamp duty", "absd", ...], ...},
+        }
 
-    @staticmethod
-    def _extract_topic_tags(text: str, heading_texts: list[str]) -> list[str]:
-        combined = text + " " + " ".join(heading_texts)
-        found: set[str] = set()
-        for pattern, tag in _TOPIC_KEYWORDS.items():
-            if re.search(pattern, combined, re.IGNORECASE):
-                found.add(tag)
-        return sorted(found)
+        Returns: {"property_type": ["HDB"], "citizenship": ["SC"], "topic": ["stamp_duty"]}
+        """
+        combined = (text + " " + " ".join(heading_texts)).lower()
+        tags: dict[str, list[str]] = {}
+
+        for category, keywords_dict in tag_config.items():
+            if not isinstance(keywords_dict, dict):
+                continue
+            found: set[str] = set()
+            for tag_label, keywords in keywords_dict.items():
+                if isinstance(keywords, list):
+                    for keyword in keywords:
+                        if keyword.lower() in combined:
+                            found.add(tag_label)
+                            break
+            if found:
+                tags[category] = sorted(found)
+
+        return tags
 
     @staticmethod
     def _extract_section(headings: list[dict], title: str) -> str:

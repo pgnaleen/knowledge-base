@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip install*)",
+      "Bash(pip install -e *)",
+      "Bash(python -m pytest*)",
+      "Bash(python -c *)",
+      "Bash(ruff check*)",
+      "Bash(ruff check * --fix)",
+      "Bash(black*)",
+      "Bash(docker compose*)",
+      "Bash(docker exec*)",
+      "Bash(alembic*)",
+      "Bash(scrapy*)",
+      "Bash(playwright install*)"
+    ],
+    "deny": []
+  }
+}
