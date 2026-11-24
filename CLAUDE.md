@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Guidance for Claude Code when working in this repository. See [README.md](README.md) for the full architecture, library list, code flow and verification plan.
+Guidance for Claude Code when working in this repository. See [README.md](README.md) and [docs/TECHNICAL_REFERENCE.md](docs/TECHNICAL_REFERENCE.md) for the full architecture, library list, code flow and verification plan.
 
 ## Project Overview
 
